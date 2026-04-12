@@ -15,25 +15,10 @@ green_color = :green
 module tracksAnalysis
     include("tracks.jl")
 end
-using .tracksAnalysis: expocdf, twostepcdf, prepcdf, threestepcdf, concfromstr
+using .tracksAnalysis: expocdf, twostepcdf, prepcdf, threestepcdf, concfromstr, cleannames
 
 
 ### CLEANUP FUNCTIONS ###
-
-
-
-
-"""
-Get nice clean dataset names from the raw file names. 
-"""
-function cleannames(namelist)
-    # Extract concentration of each name
-    shortnames = collect(join(split(x, "_")[2:end], " ") for x in namelist)
-    shortnames = collect(join(split(x, ".")[1:end-1], ".") for x in shortnames)
-    shortnames = collect(map(x -> replace(x, " z2" => ""), shortnames))
-    lblconcs = collect(concfromstr(x, "pM", " ") for x in shortnames)  # in pM
-    return shortnames, lblconcs
-end
 
 
 """

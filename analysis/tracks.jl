@@ -24,11 +24,22 @@ function concfromstr(s, unit, delim)
 end
 
 
+"""
+Get nice clean dataset names from the raw file names. 
+"""
+function cleannames(namelist)
+    # Extract concentration of each name
+    shortnames = collect(join(split(x, "_")[2:end], " ") for x in namelist)
+    shortnames = collect(join(split(x, ".")[1:end-1], ".") for x in shortnames)
+    shortnames = collect(map(x -> replace(x, " z2" => ""), shortnames))
+    lblconcs = collect(concfromstr(x, "pM", " ") for x in shortnames)  # in pM
+    return shortnames, lblconcs
+end
+
+
 ### FUNCTIONS TO LOAD AND PREPROCESS TRACKS DATASETS ###
 
 function gettrajs(df, colname)
-    # Not so easy to map a function to a column, makes me miss pandas 
-    # (and I don't even like pandas!)
     # https://stackoverflow.com/questions/61882298/how-to-apply-a-function-columnwise-to-julia-dataframe
     dftrajs = DF.dropmissing(df, :TRACK_ID)
     # a cols => function => target_cols form
@@ -141,7 +152,7 @@ end
 
 
 """
-Estimate the background very safely: min value in each trajectory, median
+Estimate the background very conservatively: min value in each trajectory, median
 """
 function findbackmin(df; stat="median")
     cback = 0.0
@@ -166,6 +177,7 @@ end
 
 """
 Function to apply findjump_thresh to each trajectory in the DataFrame of tracks
+Also returns movie duration. 
 """
 function findactivtimes_thresh(dfc; fracabove=0.5, disp=true)  
     if disp
@@ -176,10 +188,6 @@ function findactivtimes_thresh(dfc; fracabove=0.5, disp=true)
     # it under-estimates the background a bit, but use a higher threshold to compensate
     cback = findbackmin(dfc)
     thresh = cback * (1.0 + fracabove)
-    # Don't care about other methods because anyways we will try varying
-    # One thing to try: different threshold for each track, adapted to its
-    # dynamical range, or at least rescaling the tracks to have a common
-    # minimum. But that creates issues for tracks active at time 0. 
 
     # Treat one trajectory at a time. Drop the TIME and FRAME columns
     # Use Dicts to clarify the column -> activ time association
@@ -206,21 +214,38 @@ function findactivtimes_thresh(dfc; fracabove=0.5, disp=true)
 end
 
 
-### EXPONENTIAL CDF FITTING FUNCTION ###
-# Turn a list of activation times into an array of distinct CDF values
+"""
+Apply findactivtimes_thresh to a list of datasets, return the list of activation times and durations
+"""
+function prepalldsets(fpaths; ch="MEAN_INTENSITY_CH2", filterpms=[50, 30.0], fracabove=0.5, disp=true)
+    tactiv_alldsets = []
+    durations_alldsets = []
+    for fpath in fpaths
+        dfc = preptrajdata(fpath; ch=ch, filterpms=filterpms)
+        duration = maximum(dfc.TIME)
+        tactiv, _, _ = findactivtimes_thresh(dfc; fracabove=fracabove, disp=disp)
+        push!(tactiv_alldsets, tactiv)
+        push!(durations_alldsets, duration)
+    end
+    nicenames = cleannames(fpaths)[1]
+    return tactiv_alldsets, durations_alldsets, nicenames
+end
+
+
+### CDF PREPARATION ###
+
+"""
+Turn a list of activation times into an array of distinct CDF values
+"""
 function uniquecdf(t; addzero=false, makeunique=false)
     ngoodpoints = length(t)
     if addzero  # for plotting really
         t = vcat([0.0], t)  # first point is zero
     end
-    if makeunique
-        tu = unique(t)
-    else
-        tu = t
-    end
 
     # Increment cumul 
     if makeunique
+        tu = unique(t)
         # Point i in cumul is the number of elements in t
         # smaller or equal to the time at tu[i]
         cumul = zeros(Float64, length(tu))
@@ -240,22 +265,10 @@ function uniquecdf(t; addzero=false, makeunique=false)
             end
         end
     else
+        tu = t
         cumul = collect(range(1, length(tu)))
     end
     return tu, cumul
-end
-
-
-function expocdf(t::Array, rate::Float64; t0::Float64=0.0)
-    rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
-    cdf = 1.0 .- exp.(-rtt0)
-    return cdf
-end
-
-function twostepcdf(t::Array, rate::Float64; t0::Float64=0.0)
-    rt = clamp!(rate .* (t .- t0), 0.0, Inf)
-    cdf = 1.0 .- exp.(-rt) .* (1.0 .+ rt)
-    return cdf
 end
 
 
@@ -263,7 +276,7 @@ end
 Prepare empirical cumulative distribution function
 from a list of activation times.
 """
-function prepcdf(tactiv, cdfthresh)
+function prepcdf(tactiv, cdfthresh, duration)
     # 1. Extract a sorted list of activation times
     t = sort(collect(skipmissing(tactiv[1, :])))
     
@@ -300,224 +313,301 @@ function prepcdf(tactiv, cdfthresh)
     # If the limit is above the largest fraction of active cells in the data
     if (isnothing(ilim) || (ilim < 3) || tlim < 1e-6)
         ilim = length(cumul)  # include all points
+        tlim = duration
     end
     
-    return tu, cumul, ilim, ncells
+    return tu, cumul, ilim, ncells, tlim
 end
 
 
-### LOG-LIKELIHOOD FUNCTIONS AND DERIVATIVES
+### MODELS PDFs AND CDFs ###
 
-function loglhood_linear(p, times, klim1, ncell, klim0)
-    k, t0 = p
-    nc0 = klim0 - 1  # number of cells with t_activ = 0
-    nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
+"""
+For observed k fit, showing there may be a cell activation-limited step
+"""
+function expocdf(t::Array, rate::Float64; t0::Float64=0.0)
+    rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
+    cdf = 1.0 .- exp.(-rtt0)
+    return cdf
+end
+
+
+"""
+One-hit model with cell activation
+Concentration is in pM, kappa is relative to that. 
+"""
+function onehit_pdf(t::Array, conc::Float64, 
+        kappa::Float64, k2::Float64; t0::Float64=0.0)
+    kc = kappa * conc
+    tt0 = t .- t0
+    factor = k2 * kc / (k2 - kc)
+    fctpart = exp.(-kc .* tt0) .- exp.(-k2 .* tt0)
+    pdf = factor .* fctpart
+    return pdf
+end
+
+
+"""
+CDF of the 1-hit model
+"""
+function onehit_cdf(t::Array, conc::Float64, 
+        kappa::Float64, k2::Float64; t0::Float64=0.0)
+    kc = kappa * conc
+    tt0 = t .- t0
+    kdiff = (k2 - kc)
+    fctpart = kc .* exp.(-kc .* tt0) .- k2 .* exp.(-k2 .* tt0)
+    cdf = 1.0 .- fctpart ./ kdiff
+    return cdf
+end
+
+
+"""
+Two-hit model with cell activation step
+"""
+function twohit_pdf(t::Array, conc::Float64, 
+        kappa::Float64, k2::Float64; t0::Float64=0.0)
+    kc = kappa * conc
+    tt0 = t .- t0
+    kdiff = k2 - kc
+    factor = k2 * kc*kc / kdiff
+    fctpart1 = tt0 .* exp(-kc .* tt0)
+    fctpart2 = (exp.(-kc .* tt0) .- exp.(-k2 .* tt0)) ./ kdiff
+    pdf = factor .* (fctpart1 .+ fctpart2)
+    return pdf
+end
+
+
+"""
+CDF of the 2-hit model
+"""
+function twohit_cdf(t::Array, conc::Float64, 
+        kappa::Float64, k2::Float64; t0::Float64=0.0)
+    kc = kappa * conc
+    kdiff = k2 - kc
+    tt0 = t .- t0
+    fact1 = k2 * kc / (kdiff * kdiff)
+    fact2 = k2 / kdiff
+    fact3 = kc*kc / (kdiff*kdiff)
+    ekct0 = exp.(-kc .* tt0)
+    term1 = fact1 .* (ekct0 .- 1.0)
+    term2 = fact2 .* (1.0 - ekct0 .* (1.0 .+ kc .* tt0))
+    term3 = fact3 .* (1.0 .- exp.(-k2 .* tt0))
+    cdf = term1 .+ term2 .- term3
+    return cdf
+end
+
+
+### LOG-LIKELIHOOD FUNCTIONS AND DERIVATIVES ###
+
+"""
+log-likelihood for 1 dataset for the 1-hit model
+"""
+function onehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
+    kappa, k2, t0 = p
+    if te === nothing
+        te = times[min(klim1, length(times))]
+    end
     if k < -10  #(times[1] < t0) || (k <= 0)
         ll = -1e8
     else
-        # Number of cells should include those never activated
+        # Note that ncell includes those never activated, 
         # whereas times only includes cells eventually activated
-        nactiv = length(times)
-        te = times[min(klim1, nactiv)]  # last considered time point
-        ll = nc1 * log(k) - (ncell - nc0 - nc1) * k * (te - t0)
-        if nc0 > 0
-            ll += nc0 * log(expocdf([0.0], k; t0=t0)[1])
-        end
-        # Loop over cells with 0 < t_activ < tmax
-        for nn in klim0:1:klim1
-            ll -= k * (times[nn] - t0)
-        end
+        nc0 = klim0 - 1  # number of cells with t_activ = 0
+        nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
+        ll = nc0 * log(onehit_cdf([0.0], conc, kappa, k2; t0=t0)[1])
+        ll += sum(log.(onehit_pdf(times[klim0:klim1-1], conc, kappa, k2; t0=t0)))
+        ll += (ncell - nc0 - nc1) * log(1.0 - onehit_cdf([te], conc, kappa, k2; t0=t0)[1])
     end
     return ll
 end
 
 
-function deriv_minuslogl_linear!(dp, p, times, klim1, ncell, klim0)
-    k, t0 = p
-    nc0 = klim0 - 1  # number of cells with t_activ = 0
-    nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
-    nactiv = length(times)
-    te = times[min(klim1, nactiv)]  # last considered time point
-    expkt0 = exp(k*t0)
-    if nc0 > 0
-        common = nc0 * expkt0 / (1.0 - expkt0)
-    else
-        common = 0.0 
+"""
+Log-likelihood across datasets for the 1-hit model
+"""
+function onehit_loglhood_total(p_all, times_all, concs, ncells, 
+            klim0s, klim1s; te=nothing)
+    # From the lists of times, klim0s, klim1s, ncells
+    # compute likelihood contribution from each dataset, 
+    # with one t0 per dataset, and combine at the end. 
+    ndsets = length(concs)
+    ll_total = 0.0
+    for n in 1:1:ndsets
+        p = [p_all[1], p_all[2], p_all[2 + n]]  # kappa, k2, t0 for dataset n
+        ll = onehit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
+                        klim0s[n], klim1s[n]; te=te)
+        ll_total += ll  # no weighting for now 
     end
-    dp[1] = -nc1 / k + (ncell - nc0 - nc1) * (te - t0)
-    dp[1] += common * t0
-    dp[2] = -(ncell - nc0) * k + common * k
-    for nn in klim0:1:klim1
-        dp[1] += (times[nn] - t0)
-    end
-    return dp
+    return ll_total
 end
 
 
-function hess_minuslogl_linear!(mat, p, times, klim1, ncell, klim0)
-    k, t0 = p
-    nc0 = klim0 - 1  # number of cells with t_activ = 0
-    nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
-    expkt0 = exp(k*t0)
-    if nc0 > 0
-        common = nc0 * expkt0 / (1.0 - expkt0)^2
-    else
-        common = 0.0
+"""
+log-likelihood for 1 dataset for the 1-hit model
+"""
+function twohit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
+    kappa, k2, t0 = p
+    if te === nothing
+        te = times[min(klim1, length(times))]
     end
-    mat[1, 1] = nc1 / k^2 + common * t0*t0
-    mat[1, 2] = -(ncell - nc0) - common * (expkt0 - k*t0 - 1.0)
-    mat[2, 1] = mat[1, 2]
-    mat[2, 2] = common * k*k
-    return mat
-end
-
-
-
-### Quadratic model
-# Now includes F_T(0) for cells activated at (or possibly prior to) t = 0
-function loglhood_quadratic(p, times, klim1, ncell, klim0)
-    k, t0 = p
-    nc0 = klim0 - 1  # number of cells with t_activ = 0
-    nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
-    if (times[1] < t0) || (k <= 0)
+    if k < -10  #(times[1] < t0) || (k <= 0)
         ll = -1e8
     else
-        nactiv = length(times)
-        te = times[min(klim1, nactiv)]  # last considered time point
-        ktet0 = k * (te - t0)
-        ll = nc1 * log(k) + (ncell - nc0 - nc1) * (log(1.0 + ktet0) - ktet0)
-        if nc0 > 0
-            ll += nc0 * log(twostepcdf([0.0], k; t0=t0)[1])
-        end
-        # Loop over cells with 0 < t_activ < tmax
-        for nn in klim0:1:klim1
-            ktnt0 = k * (times[nn] - t0)
-            ll += (log(ktnt0) - ktnt0)
-        end
+        # Note that ncell includes those never activated, 
+        # whereas times only includes cells eventually activated
+        nc0 = klim0 - 1  # number of cells with t_activ = 0
+        nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
+        ll = nc0 * log(twohit_cdf([0.0], conc, kappa, k2; t0=t0)[1])
+        ll += sum(log.(twohit_pdf(times[klim0:klim1-1], conc, kappa, k2; t0=t0)))
+        ll += (ncell - nc0 - nc1) * log(1.0 - twohit_cdf([te], conc, kappa, k2; t0=t0)[1])
     end
     return ll
 end
 
 
-function deriv_minuslogl_quadratic!(dp, p, times, klim1, ncell, klim0)
-    k, t0 = p
-    nc0 = klim0 - 1  # number of cells with t_activ = 0
-    nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
-    nactiv = length(times)
-    te = times[min(klim1, nactiv)]  # last considered time point
-    ktet0 = k * (te - t0)
-    if nc0 > 0
-        expkt0 = exp(k*t0)
-        common = nc0 * expkt0 * k*t0 / (twostepcdf([0.0], k; t0=t0)[1])
-    else
-        common = 0.0 
+"""
+Log-likelihood across datasets for the 2-hit model
+"""
+function twohit_loglhood_total(p_all, times_all, concs, ncells, 
+            klim0s, klim1s; tes=nothing)
+    # From the lists of times, klim0s, klim1s, ncells
+    # compute likelihood contribution from each dataset, 
+    # with one t0 per dataset, and combine at the end. 
+    ndsets = length(concs)
+    ll_total = 0.0
+    for n in 1:1:ndsets
+        te = nothing ? tes === nothing : tes[n]
+        p = [p_all[1], p_all[2], p_all[2 + n]]  # kappa, k2, t0 for dataset n
+        ll = twohit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
+                        klim0s[n], klim1s[n]; te=te)
+        ll_total += ll  # no weighting for now 
     end
-    dp[1] = (2 * nc1 - (ncell - nc1 - nc0) * ktet0^2 / (1.0 + ktet0)) / k
-    dp[1] = dp[1] + common * t0
-    dp[2] = (ncell - nc0 - (ncell - nc1 - nc0) / (1.0 + ktet0)) * k
-    dp[2] = dp[2] + common * k
-    for nn in klim0:1:klim1
-        tnt0 = times[nn] - t0
-        dp[1] -= tnt0
-        dp[2] -= 1.0 / tnt0
-    end
-    dp[1] = -dp[1]
-    dp[2] = -dp[2]
-    return dp
+    return ll_total
 end
 
 
-function hess_minuslogl_quadratic!(mat, p, times, klim1, ncell, klim0)
-    k, t0 = p
-    nc0 = klim0 - 1  # number of cells with t_activ = 0
-    nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
-    nactiv = length(times)
-    te = times[min(klim1, nactiv)]  # last considered time point
-    ktet0 = k*(te - t0)
-    frac = (ncell - nc0 - nc1) / (1.0 + ktet0)^2
-    kt0 = k * t0
-    expkt0 = exp(kt0)
-    if nc0 > 0
-        common = nc0 * expkt0 / (twostepcdf([0.0], k; t0=t0)[1])^2
-    else
-        common = 0.0
-    end
-    mat[1, 1] = (2.0*klim0 + frac * ktet0^2) / k^2
-    mat[1, 1] -= common * t0*t0 * (1.0 + kt0 - expkt0)
-    mat[1, 2] = -(ncell - nc0 - frac)
-    mat[1, 2] -= common * k * t0 * (2.0 * (1.0 - expkt0) + kt0*(1.0 + expkt0))
-    mat[2, 1] = mat[1, 2]
-    mat[2, 2] = frac * k^2
-    mat[2, 2] -= common * k*k * (1.0 + kt0 - expkt0)
-    for nn in klim0:1:klim1
-        mat[2, 2] += 1.0 / (times[nn] - t0)^2
-    end
-    return mat
-end
+### RMS ERROR COMPUTATION ###
 
+"""
+Compute the root-mean-squared error of the fitted cumulative distribution 
+function across all datasets.
 
-### MAIN FITTING FUNCTIONS
+Arguments:
+- p_all: fitted parameters array [kappa, k2, t0_1, t0_2, ..., t0_n]
+  where kappa and k2 are shared across all datasets,
+  and t0_n is the activation time offset for dataset n.
+- tunique_all: list of unique time arrays for each dataset
+- cumuls_all: list of empirical cumulative distributions for each dataset
+- ilim0s_all: list of lower indices (first point with t > 0) for each dataset
+- ilim1s_all: list of upper indices (last point to include) for each dataset
+- concs_all: list of concentrations for each dataset
+- cdffct: the CDF function to use (e.g., onehit_cdf, twohit_cdf)
 
-# First try global maximum likelihood up to a predetermined validity period, 
-# just to see if the ML approach makes sense at all. 
-function fitcdfslope(tactiv, cdfthresh)
-    # Prepare a unique list of increase times to fit.
-    tu, cumul, ilim1, ncells = prepcdf(tactiv, cdfthresh)
-    tlim1 = tu[ilim1]
-    # Find first cell with t > 0: use CDF term instead of pdf in log-likelihood
-    # for cells before that, whose activation time could be before t = 0. 
-    ilim0 = findfirst(tu .> 0.0)
-
-    # To minimize a cost function with extra args, wrap it as
-    # vars -> Log_Likelihood(x, y, vars[1:nvar], vars[nvar+1])
-    # equivalent to lambda in Python
-    # slope estimate: f / t. 
-    lower = [1e-6, -20.0]  # slope, t0 (in s?)
-    upper = [20.0 * cdfthresh / (tlim1 + 0.1), tu[1]-1e-6]
-    init_p = [cdfthresh / (tlim1 + 0.1), -0.1]
-    #println("Initialized parameters, bounds are lower = ", lower, ", upper = ", upper)
+Returns:
+- rmserr: the root-mean-squared error computed over all datasets combined
+"""
+function compute_rms_all_dsets(p_all, tunique_all, cumuls_all, ilim0s_all, 
+                                ilim1s_all, concs_all, cdffct)
+    ndsets = length(tunique_all)
+    sres_total = 0.0
+    npts_total = 0
     
+    kappa = p_all[1]
+    k2 = p_all[2]
+    
+    for n in 1:ndsets
+        tu = tunique_all[n]
+        cumul = cumuls_all[n]
+        ilim0 = ilim0s_all[n]
+        ilim1 = ilim1s_all[n]
+        conc = concs_all[n]
+        t0 = p_all[2 + n]  # t0 for dataset n
+        
+        # Determine starting index for RMS calculation
+        # Prevent issues if there is no point with t_activ > 0
+        rms_i = (ilim1 > ilim0) ? ilim0 : 1
+        
+        # Compute the fitted CDF for this dataset
+        cdfestim = cdffct(tu[rms_i:ilim1], conc, kappa, k2; t0=t0)
+        
+        # Accumulate squared residuals
+        sres_total += sum((cumul[rms_i:ilim1] .- cdfestim).^2)
+        npts_total += (ilim1 - rms_i + 1)
+    end
+    
+    # Compute overall RMS error
+    rmserr = sqrt(sres_total / npts_total)
+    return rmserr
+end
+
+
+### MAIN FITTING FUNCTIONS ###
+
+function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdffct)
+    # kappa estimate: diffusion-limited, 0.4 pM^-1 s^-1, 
+    # times default concentration scale of 1 pM. 
+    # k2 estimate: fast to begin with
+    lower = [1e-3, 1e-3]  # kappa, k2
+    upper = [20.0, 1e3]
+    init_p = [0.4, 10.0]
+    
+    # For each dataset in the list of datasets, prepare the cdf, 
+    # numbers of cells, concentrations, and limits for the fit.
+    conc_scale = 1.0  # pM
+    n_dsets = length(tactiv_alldsets)
+    concs_all = []
+    ncell_all = []
+    k0_all = []
+    k1_all = []
+    te_all = []
+    tunique_all = []
+    cumuls_all = []
+    for i in 1:1:n_dsets
+        conc = concfromstr(dsetnames[i], "pM", ' ') / conc_scale
+        # Prepare a unique list of cell number increase times to fit.
+        tactiv = tactiv_alldsets[i]
+        tu, cumul, ilim1, ncells, tlim = prepcdf(tactiv, cdfthresh, durations[i])
+        # Find first cell with t > 0: use CDF term instead of pdf in log-likelihood
+        # for cells before that, whose activation time could be before t = 0. 
+        ilim0 = findfirst(tu .> 0.0)
+        push!(tunique_all, tu)
+        push!(cumuls_all, cumul)
+        push!(concs_all, conc)  # for now, all datasets at 1 pM
+        push!(ncell_all, ncells)
+        push!(k0_all, ilim0)
+        push!(k1_all, ilim1)
+        push!(te_all, tlim)
+        # Limits for parameter t0 for each dataset
+        push!(lower, -20.0)
+        push!(upper, -1e-6)
+        push!(init_p, -0.1)
+    end
+
     # Minimize -log likelihood
-    cost = p -> -loglhood_linear(p, tu, ilim1, ncells, ilim0)
-    # The grad and hess functions must modify G, H in-place
-    # and this must already be the derivatives of -log likelihood
-    grads! = (G, p) -> deriv_minuslogl_linear!(G, p, tu, ilim1, ncells, ilim0)
-    hess! = (H, p) -> hess_minuslogl_linear!(H, p, tu, ilim1, ncells, ilim0)
+    cost = p_all -> -loglfct(p_all, tunique_all, concs_all, ncells_all, 
+                        k0_all, k1_all; te_all, ncells, ilim0)
     inner_optimizer = IPNewton()  # or NelderMead()
     #println("Start linear fit with data points: ", tu)
     
-    results = optimize(cost, grads!, hess!,
+    results = optimize(cost,
                 lower, upper, 
                 init_p, inner_optimizer
             )
-    #println("Finished linear fit optimization")
+    #println("Finished maximum likelihood fit")
 
     # Get the results
-    slope, t0 = Optim.minimizer(results)
+    fit_params = Optim.minimizer(results)
+    kappa, k2 = fit_params[1:2]
+    t0s = fit_params[3:end]
     flag = Optim.converged(results)
     if !flag
         println("Did not converge for cdfhresh = ", cdfthresh)
         println("ilim1 = ", ilim1, " , ncells = ", ncells, " , init_p = ", init_p)
     end
 
-    # Get variance of these parameter fits. Hessian is not positive definite
-    # because the likelihood is monotonically increasing with t0, 
-    # so best fit is t0 = boundary, k* derived from dlogL/dk = 0
-    # So the uncertainty on the slope is estimated by inverting the FIM = -hessian^-1 element, 
-    # while that on t0 is the uncertainty on an experimental time
-    # so let's say (0.5 * time bin)^2. 
-    minushessmat = zeros(2, 2)
-    hess_minuslogl_linear!(minushessmat, [slope, t0], tu, ilim1, ncells, ilim0)
-    varislope = 1.0 / minushessmat[1, 1]
-    varit0 = (0.5 * (tu[2] - tu[1]))^2
-
-    # RMS error on the cdf. Number of data points used = ilim
-    # Prevent issues if there is no point with t_activ > 0
-    rms_i = (ilim1 > ilim0) ? ilim0 : 1
-    # Compute the fitted CDF
-    cdfestim = expocdf(tu[rms_i:ilim1], slope; t0=t0)
-    sres = sum((cumul[rms_i:ilim1] .- cdfestim).^2)
-    rmserr = sqrt(sres / (ilim1 - rms_i))
+    # RMS error on the cdf across all datasets
+    rmserr = compute_rms_all_dsets(fit_params, tunique_all, cumuls_all, 
+                                    k0_all, k1_all, concs_all, cdffct)
     
     # Use minus log-likelihood instead, should be minimized
     #rmserr = cost([slope, t0])
@@ -532,189 +622,7 @@ function fitcdfslope(tactiv, cdfthresh)
     evid, evid_err = hcubature(lhood, lower, upper)
     rmserr = 1.0/evid  # inverse evidence should be minimized
     =#
-    result = Array{Float64}([slope, varislope, tlim1, rmserr, t0, varit0])
+    result = Array{Float64}(hcat(fit_params, [tlim1, rmserr]))
 
     return result
-end
-
-
-# First try global maximum likelihood up to a predetermined validity period, 
-# just to see if the ML approach makes sense at all. 
-function fitcdfquad(tactiv, cdfthresh)
-    # Prepare a unique list of increase times to fit.
-    tu, cumul, ilim1, ncells = prepcdf(tactiv, cdfthresh)
-    tlim1 = tu[ilim1]
-    # Find first cell with t > 0: use CDF term instead of pdf in log-likelihood
-    # for cells before that, whose activation time could be before t = 0. 
-    # Number of cells with activation at t=0 is ilim0 - 1
-    ilim0 = findfirst(tu .> 0.0)
-
-    # To minimize a cost function with extra args, wrap it as
-    # vars -> Log_Likelihood(x, y, vars[1:nvar], vars[nvar+1])
-    # equivalent to lambda in Python
-    # slope estimate: f / t. 
-    lower = [1e-6, -20.0]  # slope, t0 (in s?)
-    upper = [50.0 * cdfthresh / (tlim1+0.1), tu[1]-1e-3]
-    init_p = [cdfthresh / (tlim1 + 0.1), -0.1]
-    # Maximize ML, so minimize -ML
-    cost = p -> -loglhood_quadratic(p, tu, ilim1, ncells, ilim0)
-    grads! = (G, p) -> deriv_minuslogl_quadratic!(G, p, tu, ilim1, ncells, ilim0)
-    hess! = (H, p) -> hess_minuslogl_quadratic!(H, p, tu, ilim1, ncells, ilim0)
-    inner_optimizer = IPNewton()
-    results = optimize(cost, grads!, hess!,
-                lower, upper, 
-                init_p, inner_optimizer
-            )
-
-    # Get the results
-    slope, t0 = Optim.minimizer(results)
-    flag = Optim.converged(results)
-    if !flag
-        println("Did not converge for cdfhresh = ", cdfthresh)
-        println("ilim = ", ilim1, " , ncells = ", ncells, " , init_p = ", init_p)
-    end
-
-    # Get variance of these parameter fits from the hessian
-    hessmat = zeros(2, 2)
-    hess_minuslogl_quadratic!(hessmat, [slope, t0], tu, ilim1, ncells, ilim0)
-    hessmat = -1.0 .* hessmat
-    varimat = covfromhess(hessmat)
-    varislope, varit0 = abs.(diag(varimat))
-
-    # RMS error on the cdf. Number of data points used = ilim
-    # Prevent issues if there is no point with t_activ > 0
-    rms_i = (ilim1 > ilim0) ? ilim0 : 1
-    # Compute the fitted CDF
-    cdfestim = twostepcdf(tu[rms_i:ilim1], slope; t0=t0)
-    sres = sum((cumul[rms_i:ilim1] .- cdfestim).^2)
-    rmserr = sqrt(sres / (ilim1 - rms_i))
-
-    result = Array{Float64}([slope, varislope, tlim1, rmserr, t0, varit0])
-
-    return result
-end
-
-
-### Three-step activation model
-
-function threestepcdf(t::Array, rate::Float64; t0::Float64=0.0)
-    rt = clamp!(rate .* (t .- t0), 0.0, Inf)
-    cdf = 1.0 .- exp.(-rt) .* (1.0 .+ rt .* (1.0 .+ 0.5 .* rt))
-    return cdf
-end
-
-function loglhood_3step(p, times, klim1, ncell, klim0)
-    k, t0 = p
-    nc0 = klim0 - 1  # number of cells with t_activ = 0
-    nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
-    if (times[1] < t0) || (k <= 0)
-        ll = -1e8
-    else
-        nactiv = length(times)
-        te = times[min(klim1, nactiv)]  # last considered time point
-        ktet0 = k * (te - t0)
-        ll = nc1 * log(0.5*k) 
-        ll += (ncell - nc0 - nc1) * log(1.0 - threestepcdf([te], k; t0=t0)[1])
-        if nc0 > 0
-            ll += nc0 * log(threestepcdf([0.0], k; t0=t0)[1])
-        end
-        # Loop over cells with 0 < t_activ < tmax
-        for nn in klim0:1:klim1
-            ktnt0 = k * (times[nn] - t0)
-            ll += (log(0.5 * ktnt0*ktnt0) - ktnt0)
-        end
-    end
-    return ll
-end
-
-function deriv_minuslogl_3step!(dp, p, times, klim1, ncell, klim0)
-    k, t0 = p
-    nc0 = klim0 - 1  # number of cells with t_activ = 0
-    nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
-    nactiv = length(times)
-    te = times[min(klim1, nactiv)]  # last considered time point
-    ktet0 = k * (te - t0)
-    kt0 = k * t0
-    if nc0 > 0
-        expkt0 = exp(k*t0)
-        common = nc0 * expkt0 * kt0*kt0 / (2.0*threestepcdf([0.0], k; t0=t0)[1])
-    else
-        common = 0.0
-    end
-    poly = 1.0 + ktet0 * (1.0 + 0.5 * ktet0)
-    dp[1] = -common * t0 + 3.0 * nc1 / k
-    dp[1] -= 0.5 * (ncell - nc1 - nc0) * ktet0^3 / k / poly
-    dp[2] = (ncell - nc0) * k - common * k
-    dp[2] -= (ncell - nc0 - nc1) * k * (ktet0 + 1.0) / poly
-    for nn in klim0:1:klim1
-        tnt0 = times[nn] - t0
-        dp[1] -= tnt0
-        dp[2] -= 2.0 / tnt0
-    end
-    dp[1] = -dp[1]
-    dp[2] = -dp[2]
-    return dp
-end
-
-
-# First try global maximum likelihood up to a predetermined validity period, 
-# just to see if the ML approach makes sense at all. 
-function fitcdf3step(tactiv, cdfthresh)
-    # Similar preparation as above
-    tu, cumul, ilim1, ncells = prepcdf(tactiv, cdfthresh)
-    tlim1 = tu[ilim1]
-    ilim0 = findfirst(tu .> 0.0)
-
-    lower = [1e-6, -20.0]  # slope, t0 (in s?)
-    upper = [50.0 * cdfthresh / (tlim1+0.1), tu[1]-1e-3]
-    init_p = [cdfthresh / (tlim1 + 0.1), -0.1]
-    cost = p -> -loglhood_3step(p, tu, ilim1, ncells, ilim0)
-    grads! = (G, p) -> deriv_minuslogl_3step!(G, p, tu, ilim1, ncells, ilim0)
-    inner_optimizer = IPNewton()  # or NelderMead()
-    results = optimize(cost, grads!,
-                lower, upper, 
-                init_p, inner_optimizer
-            )
-
-    # Get the results
-    slope, t0 = Optim.minimizer(results)
-    flag = Optim.converged(results)
-    if !flag
-        println("Did not converge for cdfhresh = ", cdfthresh)
-        println("ilim = ", ilim1, " , ncells = ", ncells, " , init_p = ", init_p)
-    end
-
-    # Hessian not implemented, return unit variance, not used currently anyways
-    hessmat = zeros(2, 2) + UniformScaling(1)
-    varimat = covfromhess(hessmat)
-    varislope, varit0 = abs.(diag(varimat))
-
-    rms_i = (ilim1 > ilim0) ? ilim0 : 1
-    # Compute the fitted CDF
-    cdfestim = threestepcdf(tu[rms_i:ilim1], slope; t0=t0)
-    sres = sum((cumul[rms_i:ilim1] .- cdfestim).^2)
-    rmserr = sqrt(sres / (ilim1 - rms_i))
-
-    result = Array{Float64}([slope, varislope, tlim1, rmserr, t0, varit0])
-
-    return result
-end
-
-
-
-### Utilities for parameter uncertainties
-
-# Adapted from Scipy curve_fit, covariance matrix estimate (Crámer-Rao bound)
-# from the pseudo-inverse of the FIM, which is equal to -hessian 
-function covfromhess(hess)
-    # Do Moore-Penrose inverse, discard zero singular values.
-    U, s, V = svd(-1.0 .* hess)
-    VT = V'
-    threshold = 1e-12 * maximum(size(hess)) * s[1]
-    s = s[s .> threshold]
-    sinv = diagm(1.0 ./ s)
-    VT = VT[1:length(s), 1:end]
-    U = U[1:end, 1:length(s)]
-    pcov = U * sinv * VT
-    return pcov
 end
