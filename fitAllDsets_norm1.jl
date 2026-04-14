@@ -129,8 +129,8 @@ function onehit_ccdf(t::Array, conc::Float64,
     kc = kappa * conc
     tt0 = clamp.(t .- t0, 0.0, Inf)
     kdiff = (k2 - kc)
-    #fctpart = kc .* exp.(-kc .* tt0) .- k2 .* exp.(-k2 .* tt0)
-    fctpart = exp.(-kc .* tt0) .* (k2 .- kc .* exp.(-kdiff .* tt0))
+    fctpart = k2 .* exp.(-kc .* tt0) .- kc .* exp.(-k2 .* tt0)
+    #fctpart = exp.(-kc .* tt0) .* (k2 .- kc .* exp.(-kdiff .* tt0))
     ccdf = fctpart ./ kdiff
     return ccdf
 end
@@ -251,7 +251,7 @@ function onehit_loglhood_total(p_all, times_all, concs, ncells,
         p = [p_all[1], p_all[2], p_all[2 + n]]  # kappa, k2, t0 for dataset n
         ll = onehit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
                         klim0s[n], klim1s[n]; te=te_all[n])
-        ll_total += ll  # no weighting for now 
+        ll_total += ll / ncells[n]
     end
     return ll_total
 end
@@ -304,7 +304,7 @@ function twohit_loglhood_total(p_all, times_all, concs, ncells,
         p = [p_all[1], p_all[2], p_all[2 + n]]  # kappa, k2, t0 for dataset n
         ll = twohit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
                         klim0s[n], klim1s[n]; te=te_all[n])
-        ll_total += ll  # no weighting for now 
+        ll_total += ll / ncells[n] 
     end
     return ll_total
 end
@@ -659,6 +659,74 @@ function plot_ml_cdf_comparison(cdf_prep_results, nicenames,
 end
 
 
+"""
+Plot model curves across concentrations for both 1-hit and 2-hit models.
+Selects the dataset with the most cells for each concentration and plots
+its model curves. Uses magma colormap for concentration-dependent coloring.
+"""
+function plot_models_vs_concentration(nicenames, ncell_all, onehit_params, twohit_params,
+                                       onehit_cdf, twohit_cdf, durations)
+    conc_scale = 1.0  # pM
+    
+    # Extract concentrations and group by concentration
+    nicenames, lblconcs = cleannames(nicenames)
+    unique_concs = unique(sort(lblconcs))
+    
+    # For each unique concentration, find dataset with most cells
+    selected_indices = []
+    for conc in unique_concs
+        indices_for_conc = findall(c -> c ≈ conc, lblconcs)
+        cells_for_conc = [ncell_all[i] for i in indices_for_conc]
+        max_idx_in_group = argmax(cells_for_conc)
+        push!(selected_indices, indices_for_conc[max_idx_in_group])
+    end
+    
+    # Create plot
+    p = pl.plot(size=(800, 600), xlabel="Time (s)", ylabel="Fraction of activated cells",
+                legend=:bottomright, left_margin=3mm, right_margin=3mm, bottom_margin=3mm, 
+                ylim=[-0.02, 1.05])
+    
+    # Get time range for plotting
+    max_duration = maximum(durations)
+    trange = collect(LinRange(0, max_duration, 200))
+    
+    # Use magma colormap
+    cmap = pl.cgrad(:magma)
+    
+    # Plot curves for each concentration
+    for (idx_in_unique, dset_idx) in enumerate(selected_indices)
+        # Normalize color to [0,1] range
+        color_val = (idx_in_unique - 1) / max(1, length(unique_concs))
+        color = cmap[color_val]
+        
+        conc = lblconcs[dset_idx]
+        kappa_1 = onehit_params[1]
+        k2_1 = onehit_params[2]
+        t0_1 = 0.0
+        
+        kappa_2 = twohit_params[1]
+        k2_2 = twohit_params[2]
+        t0_2 = 0.0
+        
+        # Compute CDFs
+        cdf1 = onehit_cdf(trange, conc, kappa_1, k2_1; t0=t0_1)
+        cdf2 = twohit_cdf(trange, conc, kappa_2, k2_2; t0=t0_2)
+        
+        # Plot 1-hit model
+        label_1hit = @sprintf "1-hit: %.2g pM" conc
+        pl.plot!(p, trange, cdf1, label=label_1hit, linestyle=:solid,
+                linewidth=2.5, color=color, alpha=1.0)
+        
+        # Plot 2-hit model
+        label_2hit = @sprintf "2-hit: %.2g pM" conc
+        pl.plot!(p, trange, cdf2, label=label_2hit, linestyle=:dash,
+                linewidth=2.5, color=color, alpha=1.0)
+    end
+    
+    pl.title!(p, "Model predictions: 1-hit vs 2-hit (color = concentration)", fontsize=12)
+    
+    return p
+end
 
 
 ### MAIN ANALYSIS FUNCTION ###
@@ -806,6 +874,14 @@ function fit_ml_all_datasets(;
         pl.savefig(p_single, plot_file)
         println("  Saved: $plot_file")
     end
+    
+    # Plot: Model curves versus concentration
+    ncell_all = prep_cdf_res[2]  # Extract ncell_all from the prepared results
+    p_conc = plot_models_vs_concentration(fnames, ncell_all, onehit_params, twohit_params,
+                                           onehit_cdf, twohit_cdf, durations)
+    plot_file = joinpath(plotdir, "ml_models_vs_concentration.pdf")
+    pl.savefig(p_conc, plot_file)
+    println("  Saved: $plot_file")
     
     println("\n" * "="^70)
     println("Analysis complete!")

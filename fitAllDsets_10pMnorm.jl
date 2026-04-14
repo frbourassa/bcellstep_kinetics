@@ -56,7 +56,7 @@ Concentration is in pM, kappa is relative to that.
 function onehit_pdf(t::Array, conc::Float64, 
         kappa::Float64, k2::Float64; t0::Float64=0.0)
     kc = kappa * conc
-    tt0 = t .- t0
+    tt0 = clamp.(t .- t0, 0.0, Inf)
     factor = k2 * kc / (k2 - kc)
     fctpart = exp.(-kc .* tt0) .- exp.(-k2 .* tt0)
     pdf = factor .* fctpart
@@ -70,7 +70,7 @@ CDF of the 1-hit model
 function onehit_cdf(t::Array, conc::Float64, 
         kappa::Float64, k2::Float64; t0::Float64=0.0)
     kc = kappa * conc
-    tt0 = t .- t0
+    tt0 = clamp.(t .- t0, 0.0, Inf)
     kdiff = (k2 - kc)
     fctpart = kc .* exp.(-k2 .* tt0) .- k2 .* exp.(-kc .* tt0)
     cdf = 1.0 .+ fctpart ./ kdiff
@@ -84,10 +84,10 @@ Complementary CDF of the 1-hit model
 function onehit_ccdf(t::Array, conc::Float64, 
         kappa::Float64, k2::Float64; t0::Float64=0.0)
     kc = kappa * conc
-    tt0 = t .- t0
+    tt0 = clamp.(t .- t0, 0.0, Inf)
     kdiff = (k2 - kc)
-    #fctpart = kc .* exp.(-kc .* tt0) .- k2 .* exp.(-k2 .* tt0)
-    fctpart = exp.(-kc .* tt0) .* (k2 .- kc .* exp.(-kdiff .* tt0))
+    fctpart = k2 .* exp.(-kc .* tt0) .- kc .* exp.(-k2 .* tt0)
+    #fctpart = exp.(-kc .* tt0) .* (k2 .- kc .* exp.(-kdiff .* tt0))
     ccdf = fctpart ./ kdiff
     return ccdf
 end
@@ -99,7 +99,7 @@ Two-hit model with cell activation step
 function twohit_pdf(t::Array, conc::Float64, 
         kappa::Float64, k2::Float64; t0::Float64=0.0)
     kc = kappa * conc
-    tt0 = t .- t0
+    tt0 = clamp.(t .- t0, 0.0, Inf)
     kdiff = k2 - kc
     factor = k2 * kc*kc / kdiff
     fctpart1 = tt0 .* exp.(-kc .* tt0)
@@ -117,7 +117,7 @@ function twohit_cdf_float(t::Float64, conc::Float64,
         kappa::Float64, k2::Float64; t0::Float64=0.0)
     kc = kappa * conc
     kdiff = k2 - kc
-    tt0 = t - t0
+    tt0 = clamp.(t .- t0, 0.0, Inf)
     if max(kc, k2) * tt0 < 1e-3
         # Taylor approximation to prevent large cancellation errors
         # Leading term is in t^3, so error is (1e-2)^4 < 1e-8, good
@@ -150,7 +150,7 @@ function twohit_ccdf(t::Array, conc::Float64,
         kappa::Float64, k2::Float64; t0::Float64=0.0)
     kc = kappa * conc
     kdiff = k2 - kc
-    tt0 = t .- t0
+    tt0 = clamp.(t .- t0, 0.0, Inf)
     prefact = k2 * kc / kdiff
     fact23 = kc / kdiff
     ekct0 = exp.(-kc .* tt0)
@@ -178,10 +178,17 @@ function onehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
         # whereas times only includes cells eventually activated
         nc0 = klim0 - 1  # number of cells with t_activ = 0
         nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
+        nc2 = ncell - nc0 - nc1
         lowerlim = max(1, klim0-1)
-        ll = nc0 * log(onehit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
+        if nc0 > 0
+            ll = nc0 * log(onehit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
+        else
+            ll = 0.0
+        end
         ll += sum(log.(onehit_pdf(times[klim0:klim1-1], conc, kappa, k2; t0=t0)))
-        ll += (ncell - nc0 - nc1) * log(onehit_ccdf([te], conc, kappa, k2; t0=t0)[1])
+        if nc2 > 0
+            ll += nc2 * log(onehit_ccdf([te], conc, kappa, k2; t0=t0)[1])
+        end
     end
     return ll
 end
@@ -201,7 +208,7 @@ function onehit_loglhood_total(p_all, times_all, concs, ncells,
         p = [p_all[1], p_all[2], p_all[2 + n]]  # kappa, k2, t0 for dataset n
         ll = onehit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
                         klim0s[n], klim1s[n]; te=te_all[n])
-        ll_total += ll  # no weighting for now 
+        ll_total += ll / ncells[n]
     end
     return ll_total
 end
@@ -222,12 +229,19 @@ function twohit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
         # whereas times only includes cells eventually activated
         nc0 = klim0 - 1  # number of cells with t_activ = 0
         nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
+        nc2 = (ncell - nc0 - nc1)
         lowerlim = max(1, klim0-1)
-        ll = nc0 * log(twohit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
+        if nc0 > 0
+            ll = nc0 * log(twohit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
+        else
+            ll = 0.0
+        end
         # Two-hit pdf also has large cancellation issues
         # This model is a numerical nightmare. 
         ll += sum(log.(twohit_pdf(times[klim0:klim1-1], conc, kappa, k2; t0=t0)))
-        ll += (ncell - nc0 - nc1) * log(twohit_ccdf([te], conc, kappa, k2; t0=t0)[1])
+        if nc2 > 0
+            ll += nc2 * log(twohit_ccdf([te], conc, kappa, k2; t0=t0)[1])
+        end
     end
     return ll
 end
@@ -247,10 +261,11 @@ function twohit_loglhood_total(p_all, times_all, concs, ncells,
         p = [p_all[1], p_all[2], p_all[2 + n]]  # kappa, k2, t0 for dataset n
         ll = twohit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
                         klim0s[n], klim1s[n]; te=te_all[n])
-        ll_total += ll  # no weighting for now 
+        ll_total += ll / ncells[n] 
     end
     return ll_total
 end
+
 
 
 ### RMS ERROR COMPUTATION ###
@@ -421,7 +436,7 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
     # k2 estimate: fast to begin with
     lower = [1e-4, 1e-3]  # kappa, k2
     upper = [20.0, 20.0]
-    init_p = [0.4, 1.0]
+    init_p = [0.4, 0.1]
     
     # For each dataset in the list of datasets, prepare the cdf, 
     # numbers of cells, concentrations, and limits for the fit.
@@ -648,6 +663,75 @@ function plot_ml_cdf_comparison(cdf_prep_results, nicenames,
 end
 
 
+"""
+Plot model curves across concentrations for both 1-hit and 2-hit models.
+Selects the dataset with the most cells for each concentration and plots
+its model curves. Uses magma colormap for concentration-dependent coloring.
+"""
+function plot_models_vs_concentration(nicenames, ncell_all, onehit_params, twohit_params,
+                                       onehit_cdf, twohit_cdf, durations)
+    conc_scale = 1.0  # pM
+    
+    # Extract concentrations and group by concentration
+    nicenames, lblconcs = cleannames(nicenames)
+    unique_concs = unique(sort(lblconcs))
+    
+    # For each unique concentration, find dataset with most cells
+    selected_indices = []
+    for conc in unique_concs
+        indices_for_conc = findall(c -> c ≈ conc, lblconcs)
+        cells_for_conc = [ncell_all[i] for i in indices_for_conc]
+        max_idx_in_group = argmax(cells_for_conc)
+        push!(selected_indices, indices_for_conc[max_idx_in_group])
+    end
+    
+    # Create plot
+    p = pl.plot(size=(800, 600), xlabel="Time (s)", ylabel="Fraction of activated cells",
+                legend=:bottomright, left_margin=3mm, right_margin=3mm, bottom_margin=3mm, 
+                ylim=[-0.02, 1.05])
+    
+    # Get time range for plotting
+    max_duration = maximum(durations)
+    trange = collect(LinRange(0, max_duration, 200))
+    
+    # Use magma colormap
+    cmap = pl.cgrad(:magma)
+    
+    # Plot curves for each concentration
+    for (idx_in_unique, dset_idx) in enumerate(selected_indices)
+        # Normalize color to [0,1] range
+        color_val = (idx_in_unique - 1) / max(1, length(unique_concs))
+        color = cmap[color_val]
+        
+        conc = lblconcs[dset_idx]
+        kappa_1 = onehit_params[1]
+        k2_1 = onehit_params[2]
+        t0_1 = 0.0
+        
+        kappa_2 = twohit_params[1]
+        k2_2 = twohit_params[2]
+        t0_2 = 0.0
+        
+        # Compute CDFs
+        cdf1 = onehit_cdf(trange, conc, kappa_1, k2_1; t0=t0_1)
+        cdf2 = twohit_cdf(trange, conc, kappa_2, k2_2; t0=t0_2)
+        
+        # Plot 1-hit model
+        label_1hit = @sprintf "1-hit: %.2g pM" conc
+        pl.plot!(p, trange, cdf1, label=label_1hit, linestyle=:solid,
+                linewidth=2.5, color=color, alpha=1.0)
+        
+        # Plot 2-hit model
+        label_2hit = @sprintf "2-hit: %.2g pM" conc
+        pl.plot!(p, trange, cdf2, label=label_2hit, linestyle=:dash,
+                linewidth=2.5, color=color, alpha=1.0)
+    end
+    
+    pl.title!(p, "Model predictions: 1-hit vs 2-hit (color = concentration)", fontsize=12)
+    
+    return p
+end
+
 
 
 ### MAIN ANALYSIS FUNCTION ###
@@ -796,6 +880,14 @@ function fit_ml_all_datasets(;
         println("  Saved: $plot_file")
     end
     
+    # Plot: Model curves versus concentration
+    ncell_all = prep_cdf_res[2]  # Extract ncell_all from the prepared results
+    p_conc = plot_models_vs_concentration(fnames, ncell_all, onehit_params, twohit_params,
+                                           onehit_cdf, twohit_cdf, durations)
+    plot_file = joinpath(plotdir, "ml_models_vs_concentration.pdf")
+    pl.savefig(p_conc, plot_file)
+    println("  Saved: $plot_file")
+
     println("\n" * "="^70)
     println("Analysis complete!")
     println("="^70 * "\n")
@@ -807,6 +899,6 @@ end
 
 # Run the analysis
 function (@main)(_)
-    fit_ml_all_datasets(fracabove=0.8, cdfthresh=0.8)
+    fit_ml_all_datasets(fracabove=0.8, cdfthresh=1.0)
     return 0
 end

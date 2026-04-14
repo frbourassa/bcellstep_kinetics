@@ -341,7 +341,7 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
     # k2 estimate: fast to begin with
     lower = [1e-4, 1e-3]  # kappa, k2
     upper = [20.0, 20.0]
-    init_p = [0.4, 1.0]
+    init_p = [0.4, 0.1]
 
     # For each dataset in the list of datasets, prepare the cdf, 
     # numbers of cells, concentrations, and limits for the fit.
@@ -416,7 +416,7 @@ Arguments:
 - conc: concentration for this dataset
 - cdffct1, cdffct2: CDF functions for the two models
 """
-function plot_single_dataset_cdf(tactiv, name, duration, cdfthresh,
+function plot_single_dataset_cdf(cdf_prep_results_one, name, duration, cdfthresh,
                                   kappa1, k2_1, t0_1,
                                   kappa2, k2_2, t0_2,
                                   cdffct1, cdffct2)
@@ -432,14 +432,10 @@ function plot_single_dataset_cdf(tactiv, name, duration, cdfthresh,
     println("t0_2:", t0_2)
 
     # Prepare empirical CDF
-    tu, cumul, ilim1, ncells, tlim = prepcdf(tactiv, cdfthresh, duration)
+    conc, ncells, ilim0, ilim1, tlim, tu, cumul = cdf_prep_results_one
     println("Number of activ times:", length(tu))
     println("ncells:", ncells)
     println("tlim:", tlim)
-    ilim0 = findfirst(tu .> 0.0)
-    rms_i = (ilim1 > ilim0) ? ilim0 : 1
-    conc_scale = 1.0  # pM
-    conc = concfromstr(name, "pM", ' ') / conc_scale
     println("Concentration:", conc)
     
     # Scale CDF for plotting
@@ -494,12 +490,13 @@ Arguments:
 - onehit_cdf, twohit_cdf: CDF functions
 - onehit_rms, twohit_rms: RMS errors for model comparison
 """
-function plot_ml_cdf_comparison(tactiv_alldsets, nicenames, durations, cdfthresh,
+function plot_ml_cdf_comparison(cdf_prep_results, nicenames, 
                                  onehit_params, twohit_params,
                                  onehit_cdf, twohit_cdf,
-                                 onehit_rms, twohit_rms)
-    
-    n_dsets = length(tactiv_alldsets)
+                                 onehit_rms, twohit_rms, durations)
+    (concs_all, ncell_all, k0_all, k1_all, 
+                te_all, tu_all, cumuls_all) = cdf_prep_results
+    n_dsets = length(tu_all)
     conc_scale = 1.0  # pM
 
     # Determine layout (try to make roughly square)
@@ -508,15 +505,10 @@ function plot_ml_cdf_comparison(tactiv_alldsets, nicenames, durations, cdfthresh
     
     # Create subplot layout
     p = pl.plot(layout=(nrows, ncols), size=(400*ncols, 350*nrows),
-                left_margin=3mm, right_margin=3mm, bottom_margin=3mm, 
-                link=:both)
-    # Prepare all empirical CDFs
-    res = prepare_all_cdfs(tactiv_alldsets, nicenames, durations, cdfthresh)
-    concs_all, ncell_all, k0_all, k1_all, te_all, tu_all, cumuls_all = res
-
+                left_margin=3mm, right_margin=3mm, bottom_margin=3mm)
+    tplotlim = [-5.0, maximum([maximum(a) for a in tu_all]) * 1.05]
+    fracplotlim = [-0.05, 1.05]
     for i in 1:n_dsets
-        tactiv = tactiv_alldsets[i]
-
         # Extract concentration
         conc = concfromstr(nicenames[i], "pM", ' ') / conc_scale
         
@@ -547,7 +539,8 @@ function plot_ml_cdf_comparison(tactiv_alldsets, nicenames, durations, cdfthresh
         # Plot on subplot i
         pl.plot!(p[i], goodt, ncumul, linetype=:steppost,
                  color=:black, linewidth=2, label="Data", alpha=0.7, 
-                 legend=:bottomright, legendfontsize=8)
+                 legend=:bottomright, legendfontsize=8, 
+                 xlim=tplotlim, ylim=fracplotlim)
         
         pl.scatter!(p[i], tu, cumul .* ncells, color=:black,
                     markersize=3, label=nothing, alpha=0.5)
@@ -559,7 +552,7 @@ function plot_ml_cdf_comparison(tactiv_alldsets, nicenames, durations, cdfthresh
                  color=:red, linewidth=1.8, linestyle=:dash)
         
         pl.xlabel!(p[i], "Time (s)", fontsize=10)
-        pl.ylabel!(p[i], "Active cells", fontsize=10)
+        pl.ylabel!(p[i], "Fraction active cells", fontsize=10)
         pl.title!(p[i], nicenames[i], fontsize=11)
     end
     for i in n_dsets+1:1:nrows * ncols
@@ -593,6 +586,77 @@ function quicktest(_)
     display(p)
     return 0
 end
+
+
+"""
+Plot model curves across concentrations for both 1-hit and 2-hit models.
+Selects the dataset with the most cells for each concentration and plots
+its model curves. Uses magma colormap for concentration-dependent coloring.
+"""
+function plot_models_vs_concentration(nicenames, ncell_all, onehit_params, twohit_params,
+                                       onehit_cdf, twohit_cdf, durations)
+    conc_scale = 1.0  # pM
+    
+    # Extract concentrations and group by concentration
+    nicenames, lblconcs = cleannames(nicenames)
+    unique_concs = unique(sort(lblconcs))
+    
+    # For each unique concentration, find dataset with most cells
+    selected_indices = []
+    for conc in unique_concs
+        indices_for_conc = findall(c -> c ≈ conc, lblconcs)
+        cells_for_conc = [ncell_all[i] for i in indices_for_conc]
+        max_idx_in_group = argmax(cells_for_conc)
+        push!(selected_indices, indices_for_conc[max_idx_in_group])
+    end
+    
+    # Create plot
+    p = pl.plot(size=(800, 600), xlabel="Time (s)", ylabel="Fraction of activated cells",
+                legend=:bottomright, left_margin=3mm, right_margin=3mm, bottom_margin=3mm, 
+                ylim=[-0.02, 1.05])
+    
+    # Get time range for plotting
+    max_duration = maximum(durations)
+    trange = collect(LinRange(0, max_duration, 200))
+    
+    # Use magma colormap
+    cmap = pl.cgrad(:magma)
+    
+    # Plot curves for each concentration
+    for (idx_in_unique, dset_idx) in enumerate(selected_indices)
+        # Normalize color to [0,1] range
+        color_val = (idx_in_unique - 1) / max(1, length(unique_concs))
+        color = cmap[color_val]
+        
+        conc = lblconcs[dset_idx]
+        kappa_1 = onehit_params[1]
+        k2_1 = onehit_params[2]
+        t0_1 = 0.0
+        
+        kappa_2 = twohit_params[1]
+        k2_2 = twohit_params[2]
+        t0_2 = 0.0
+        
+        # Compute CDFs
+        cdf1 = onehit_cdf(trange, conc, kappa_1, k2_1; t0=t0_1)
+        cdf2 = twohit_cdf(trange, conc, kappa_2, k2_2; t0=t0_2)
+        
+        # Plot 1-hit model
+        label_1hit = @sprintf "1-hit: %.2g pM" conc
+        pl.plot!(p, trange, cdf1, label=label_1hit, linestyle=:solid,
+                linewidth=2.5, color=color, alpha=1.0)
+        
+        # Plot 2-hit model
+        label_2hit = @sprintf "2-hit: %.2g pM" conc
+        pl.plot!(p, trange, cdf2, label=label_2hit, linestyle=:dash,
+                linewidth=2.5, color=color, alpha=1.0)
+    end
+    
+    pl.title!(p, "Model predictions: 1-hit vs 2-hit (color = concentration)", fontsize=12)
+    
+    return p
+end
+
 
 
 ### MAIN ANALYSIS FUNCTION ###
@@ -714,20 +778,24 @@ function fit_ml_all_datasets(;
     println("\n" * "-"^70)
     println("Generating plots...")
     println("-"^70)
+
+    # Prepare all empirical CDFs
+    prep_cdf_res = prepare_all_cdfs(tactiv_alldsets, nicenames, durations, cdfthresh)
     
     # Plot: All datasets, both models
-    p_all = plot_ml_cdf_comparison(tactiv_alldsets, nicenames, durations, cdfthresh,
+    p_all = plot_ml_cdf_comparison(prep_cdf_res, nicenames, 
                                     onehit_params, twohit_params, 
                                     onehit_cdf, twohit_cdf,
-                                    onehit_rms, twohit_rms)
+                                    onehit_rms, twohit_rms, durations)
     plot_file = joinpath(plotdir, "ml_cdf_all_datasets_comparison.pdf")
     pl.savefig(p_all, plot_file)
     println("  Saved: $plot_file")
     
     # Plot: Individual dataset panels
     for i in 1:n_dsets
+        prep_cdf_i = [prep_cdf_res[j][i] for j in eachindex(prep_cdf_res)]
         p_single = plot_single_dataset_cdf(
-            tactiv_alldsets[i], nicenames[i], durations[i], cdfthresh,
+            prep_cdf_i, nicenames[i], durations[i], cdfthresh,
             onehit_params[1], onehit_params[2], onehit_params[2+i],
             twohit_params[1], twohit_params[2], twohit_params[2+i],
             onehit_cdf, twohit_cdf
@@ -737,6 +805,14 @@ function fit_ml_all_datasets(;
         println("  Saved: $plot_file")
     end
     
+    # Plot: Model curves versus concentration
+    ncell_all = prep_cdf_res[2]  # Extract ncell_all from the prepared results
+    p_conc = plot_models_vs_concentration(fnames, ncell_all, onehit_params, twohit_params,
+                                           onehit_cdf, twohit_cdf, durations)
+    plot_file = joinpath(plotdir, "ml_models_vs_concentration.pdf")
+    pl.savefig(p_conc, plot_file)
+    println("  Saved: $plot_file")
+
     println("\n" * "="^70)
     println("Analysis complete!")
     println("="^70 * "\n")
@@ -748,6 +824,6 @@ end
 
 # Run the analysis
 function (@main)(_)
-    fit_ml_all_datasets(fracabove=0.8, cdfthresh=0.6)
+    fit_ml_all_datasets(fracabove=0.8, cdfthresh=0.5)
     return 0
 end
