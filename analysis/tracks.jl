@@ -322,23 +322,3 @@ function prepcdf(tactiv, cdfthresh, duration)
     return tu, cumul, ilim, ncells, tlim
 end
 
-
-function (@main)(_)
-
-    t0 = -0.001
-    trange = collect(0.0:0.01:20.0)
-    kappa = 0.4557859788980265
-    conc = 1.0
-    k2 = 0.45591241085513795
-    pdfrange1 = onehit_pdf(trange, conc, kappa, k2; t0=t0)
-    pdfrange2 = twohit_pdf(trange, conc, kappa, k2; t0=t0)
-    cdfrange1 = onehit_cdf(trange, conc, kappa, k2; t0=t0)
-    cdfrange2 = twohit_cdf(trange, conc, kappa, k2; t0=t0)
-    p = pl.plot(trange, pdfrange1, label="pdf 1", legend=:topright)
-    pl.plot!(p, trange, pdfrange2, label="pdf 2")
-    pl.plot!(p, trange, cdfrange1, label="1", legend=:topright)
-    pl.plot!(p, trange, cdfrange2, label="2")
-    pl.savefig(p, "temp.png")
-    display(p)
-    return 0
-end

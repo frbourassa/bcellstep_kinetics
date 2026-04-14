@@ -256,7 +256,7 @@ Arguments:
 - p_all: fitted parameters array [kappa, k2, t0_1, t0_2, ..., t0_n]
   where kappa and k2 are shared across all datasets,
   and t0_n is the activation time offset for dataset n.
-- tunique_all: list of unique time arrays for each dataset
+- tu_all: list of unique time arrays for each dataset
 - cumuls_all: list of empirical cumulative distributions for each dataset
 - ilim0s_all: list of lower indices (first point with t > 0) for each dataset
 - ilim1s_all: list of upper indices (last point to include) for each dataset
@@ -266,9 +266,9 @@ Arguments:
 Returns:
 - rmserr: the root-mean-squared error computed over all datasets combined
 """
-function compute_rms_all_dsets(p_all, tunique_all, cumuls_all, ilim0s_all, 
+function compute_rms_all_dsets(p_all, tu_all, cumuls_all, ilim0s_all, 
                                 ilim1s_all, concs_all, cdffct)
-    ndsets = length(tunique_all)
+    ndsets = length(tu_all)
     sres_total = 0.0
     npts_total = 0
     
@@ -276,7 +276,7 @@ function compute_rms_all_dsets(p_all, tunique_all, cumuls_all, ilim0s_all,
     k2 = p_all[2]
     
     for n in 1:ndsets
-        tu = tunique_all[n]
+        tu = tu_all[n]
         cumul = cumuls_all[n]
         ilim0 = ilim0s_all[n]
         ilim1 = ilim1s_all[n]
@@ -303,14 +303,7 @@ end
 
 ### MAIN FITTING FUNCTIONS ###
 
-function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdffct)
-    # kappa estimate: diffusion-limited, 0.4 pM^-1 s^-1, 
-    # times default concentration scale of 1 pM. 
-    # k2 estimate: fast to begin with
-    lower = [1e-4, 1e-3]  # kappa, k2
-    upper = [20.0, 20.0]
-    init_p = [0.4, 1.0]
-    
+function prepare_all_cdfs(tactiv_alldsets, dsetnames, durations, cdfthresh)
     # For each dataset in the list of datasets, prepare the cdf, 
     # numbers of cells, concentrations, and limits for the fit.
     conc_scale = 1.0  # pM
@@ -320,7 +313,7 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
     k0_all = []
     k1_all = []
     te_all = []
-    tunique_all = []
+    tu_all = []
     cumuls_all = []
     for i in 1:1:n_dsets
         conc = concfromstr(dsetnames[i], "pM", ' ') / conc_scale
@@ -330,21 +323,41 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
         # Find first cell with t > 0: use CDF term instead of pdf in log-likelihood
         # for cells before that, whose activation time could be before t = 0. 
         ilim0 = findfirst(tu .> 0.0)
-        push!(tunique_all, tu)
+        push!(tu_all, tu)
         push!(cumuls_all, cumul)
         push!(concs_all, conc)  # for now, all datasets at 1 pM
         push!(ncell_all, ncells)
         push!(k0_all, ilim0)
         push!(k1_all, ilim1)
         push!(te_all, tlim)
-        # Limits for parameter t0 for each dataset: first recorded time point
+    end
+
+    return concs_all, ncell_all, k0_all, k1_all, te_all, tu_all, cumuls_all
+end
+
+function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdffct)
+    # kappa estimate: diffusion-limited, 0.4 pM^-1 s^-1, 
+    # times default concentration scale of 1 pM. 
+    # k2 estimate: fast to begin with
+    lower = [1e-4, 1e-3]  # kappa, k2
+    upper = [20.0, 20.0]
+    init_p = [0.4, 1.0]
+
+    # For each dataset in the list of datasets, prepare the cdf, 
+    # numbers of cells, concentrations, and limits for the fit.
+    res = prepare_all_cdfs(tactiv_alldsets, dsetnames, durations, cdfthresh)
+    concs_all, ncell_all, k0_all, k1_all, te_all, tu_all, cumuls_all = res
+
+    # Limits for parameter t0 for each dataset: first recorded time point
+    n_dsets = length(tactiv_alldsets)
+    for i in 1:1:n_dsets
         push!(lower, -20.0)
-        push!(upper, tu[1]-1e-3)
+        push!(upper, tu_all[i][1]-1e-3)
         push!(init_p, -0.1)
     end
 
     # Minimize -log likelihood
-    cost = p_all -> -loglfct(p_all, tunique_all, concs_all, ncell_all, 
+    cost = p_all -> -loglfct(p_all, tu_all, concs_all, ncell_all, 
                         k0_all, k1_all; te_all=te_all)
     inner_optimizer = IPNewton()  # or NelderMead()
     #println("Start linear fit with data points: ", tu)
@@ -366,7 +379,7 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
     end
 
     # RMS error on the cdf across all datasets
-    rmserr = compute_rms_all_dsets(fit_params, tunique_all, cumuls_all, 
+    rmserr = compute_rms_all_dsets(fit_params, tu_all, cumuls_all, 
                                     k0_all, k1_all, concs_all, cdffct)
     
     # Use minus log-likelihood instead, should be minimized
@@ -497,6 +510,9 @@ function plot_ml_cdf_comparison(tactiv_alldsets, nicenames, durations, cdfthresh
     p = pl.plot(layout=(nrows, ncols), size=(400*ncols, 350*nrows),
                 left_margin=3mm, right_margin=3mm, bottom_margin=3mm, 
                 link=:both)
+    # Prepare all empirical CDFs
+    res = prepare_all_cdfs(tactiv_alldsets, nicenames, durations, cdfthresh)
+    concs_all, ncell_all, k0_all, k1_all, te_all, tu_all, cumuls_all = res
 
     for i in 1:n_dsets
         tactiv = tactiv_alldsets[i]
@@ -504,9 +520,12 @@ function plot_ml_cdf_comparison(tactiv_alldsets, nicenames, durations, cdfthresh
         # Extract concentration
         conc = concfromstr(nicenames[i], "pM", ' ') / conc_scale
         
-        # Prepare empirical CDF
-        tu, cumul, ilim1, ncells, tlim = prepcdf(tactiv, cdfthresh, durations[i])
-        ncells = 1  # normalized CDF
+        tu = tu_all[i]
+        cumul = cumuls_all[i]
+        ilim1 = k1_all[i]
+        ncells = ncell_all[i]
+        tlim = te_all[i]
+        ncells = 1  # plot normalized cdfs
         
         # Scale CDF for plotting
         goodt = vcat([0], tu)
@@ -555,6 +574,25 @@ function plot_ml_cdf_comparison(tactiv_alldsets, nicenames, durations, cdfthresh
 end
 
 
+
+function quicktest(_)
+    t0 = -0.001
+    trange = collect(0.0:0.01:20.0)
+    kappa = 0.4557859788980265
+    conc = 1.0
+    k2 = 0.45591241085513795
+    pdfrange1 = onehit_pdf(trange, conc, kappa, k2; t0=t0)
+    pdfrange2 = twohit_pdf(trange, conc, kappa, k2; t0=t0)
+    cdfrange1 = onehit_cdf(trange, conc, kappa, k2; t0=t0)
+    cdfrange2 = twohit_cdf(trange, conc, kappa, k2; t0=t0)
+    p = pl.plot(trange, pdfrange1, label="pdf 1", legend=:topright)
+    pl.plot!(p, trange, pdfrange2, label="pdf 2")
+    pl.plot!(p, trange, cdfrange1, label="1", legend=:topright)
+    pl.plot!(p, trange, cdfrange2, label="2")
+    pl.savefig(p, "temp.png")
+    display(p)
+    return 0
+end
 
 
 ### MAIN ANALYSIS FUNCTION ###
