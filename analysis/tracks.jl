@@ -4,6 +4,8 @@ using DataFrames: DataFrames as DF  # all methods available as DF.method
 using CSV: CSV  # all methods available as CSV.method
 using Optim: Optim, optimize, IPNewton
 using LinearAlgebra: UniformScaling, diag, diagm, svd
+using Printf: @sprintf
+using Plots: Plots as pl
 
 
 ### SHORT UTILITY FUNCTIONS ###
@@ -227,7 +229,8 @@ function prepalldsets(fpaths; ch="MEAN_INTENSITY_CH2", filterpms=[50, 30.0], fra
         push!(tactiv_alldsets, tactiv)
         push!(durations_alldsets, duration)
     end
-    nicenames = cleannames(fpaths)[1]
+    fnames = collect(basename(fp) for fp in fpaths)
+    nicenames = cleannames(fnames)[1]
     return tactiv_alldsets, durations_alldsets, nicenames
 end
 
@@ -355,9 +358,24 @@ function onehit_cdf(t::Array, conc::Float64,
     kc = kappa * conc
     tt0 = t .- t0
     kdiff = (k2 - kc)
-    fctpart = kc .* exp.(-kc .* tt0) .- k2 .* exp.(-k2 .* tt0)
-    cdf = 1.0 .- fctpart ./ kdiff
+    fctpart = kc .* exp.(-k2 .* tt0) .- k2 .* exp.(-kc .* tt0)
+    cdf = 1.0 .+ fctpart ./ kdiff
     return cdf
+end
+
+
+"""
+Complementary CDF of the 1-hit model
+"""
+function onehit_ccdf(t::Array, conc::Float64, 
+        kappa::Float64, k2::Float64; t0::Float64=0.0)
+    kc = kappa * conc
+    tt0 = t .- t0
+    kdiff = (k2 - kc)
+    #fctpart = kc .* exp.(-kc .* tt0) .- k2 .* exp.(-k2 .* tt0)
+    fctpart = exp.(-kc .* tt0) .* (k2 .- kc .* exp.(-kdiff .* tt0))
+    ccdf = fctpart ./ kdiff
+    return ccdf
 end
 
 
@@ -370,30 +388,63 @@ function twohit_pdf(t::Array, conc::Float64,
     tt0 = t .- t0
     kdiff = k2 - kc
     factor = k2 * kc*kc / kdiff
-    fctpart1 = tt0 .* exp(-kc .* tt0)
+    fctpart1 = tt0 .* exp.(-kc .* tt0)
     fctpart2 = (exp.(-kc .* tt0) .- exp.(-k2 .* tt0)) ./ kdiff
-    pdf = factor .* (fctpart1 .+ fctpart2)
+    pdf = factor .* (fctpart1 .- fctpart2)
     return pdf
 end
 
 
 """
-CDF of the 2-hit model
+CDF of the 2-hit model, coded in a way that prevents large
+cancellation errors when tt0 is approximately 0. TODO
 """
+function twohit_cdf_float(t::Float64, conc::Float64, 
+        kappa::Float64, k2::Float64; t0::Float64=0.0)
+    kc = kappa * conc
+    kdiff = k2 - kc
+    tt0 = t - t0
+    if max(kc, k2) * tt0 < 1e-3
+        # Taylor approximation to prevent large cancellation errors
+        # Leading term is in t^3, so error is (1e-2)^4 < 1e-8, good
+        cdf = k2 * kc * kc / 6.0 * tt0^3
+    else
+        prefact = k2 * kc / kdiff
+        fact1 = (k2 - 2.0 * kc) / kdiff / kc
+        fact2 = kc / kdiff / k2
+        tt0ekct0 = tt0 * exp(-kc * tt0)
+        term1 = fact1 * (1.0 - exp(-kc * tt0))
+        term2 = fact2 * (1.0 - exp(-k2 * tt0))
+        cdf = prefact * (term1 - tt0ekct0 + term2)
+        # Just can't prevent those large cancellation errors apparently
+        cdf = clamp(cdf, 1e-12, 1.0 - 1e-12)
+    end
+    return cdf
+end
+
 function twohit_cdf(t::Array, conc::Float64, 
+        kappa::Float64, k2::Float64; t0::Float64=0.0)
+    return collect(map(
+        x -> twohit_cdf_float(x, conc, kappa, k2; t0=t0), t))
+end
+
+
+"""
+Complementary CDF for the 2-hit model, 
+coded in a way that prevents 1-1 large cancellation errors. 
+"""
+function twohit_ccdf(t::Array, conc::Float64, 
         kappa::Float64, k2::Float64; t0::Float64=0.0)
     kc = kappa * conc
     kdiff = k2 - kc
     tt0 = t .- t0
-    fact1 = k2 * kc / (kdiff * kdiff)
-    fact2 = k2 / kdiff
-    fact3 = kc*kc / (kdiff*kdiff)
+    prefact = k2 * kc / kdiff
+    fact23 = kc / kdiff
     ekct0 = exp.(-kc .* tt0)
-    term1 = fact1 .* (ekct0 .- 1.0)
-    term2 = fact2 .* (1.0 - ekct0 .* (1.0 .+ kc .* tt0))
-    term3 = fact3 .* (1.0 .- exp.(-k2 .* tt0))
-    cdf = term1 .+ term2 .- term3
-    return cdf
+    term1 = ekct0 .* (1.0 .+ kc .* tt0) ./ kc
+    term2 = exp.(-k2 .* tt0) ./ k2  .- ekct0 ./ kc  
+    ccdf = prefact .* (term1 .+ fact23 .* term2)
+    return ccdf
 end
 
 
@@ -407,16 +458,17 @@ function onehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
     if te === nothing
         te = times[min(klim1, length(times))]
     end
-    if k < -10  #(times[1] < t0) || (k <= 0)
+    if (kappa < 0.0) || (k2 < 0.0) || (times[1] < t0) 
         ll = -1e8
     else
         # Note that ncell includes those never activated, 
         # whereas times only includes cells eventually activated
         nc0 = klim0 - 1  # number of cells with t_activ = 0
         nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
-        ll = nc0 * log(onehit_cdf([0.0], conc, kappa, k2; t0=t0)[1])
+        lowerlim = max(1, klim0-1)
+        ll = nc0 * log(onehit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
         ll += sum(log.(onehit_pdf(times[klim0:klim1-1], conc, kappa, k2; t0=t0)))
-        ll += (ncell - nc0 - nc1) * log(1.0 - onehit_cdf([te], conc, kappa, k2; t0=t0)[1])
+        ll += (ncell - nc0 - nc1) * log(onehit_ccdf([te], conc, kappa, k2; t0=t0)[1])
     end
     return ll
 end
@@ -426,7 +478,7 @@ end
 Log-likelihood across datasets for the 1-hit model
 """
 function onehit_loglhood_total(p_all, times_all, concs, ncells, 
-            klim0s, klim1s; te=nothing)
+            klim0s, klim1s; te_all=nothing)
     # From the lists of times, klim0s, klim1s, ncells
     # compute likelihood contribution from each dataset, 
     # with one t0 per dataset, and combine at the end. 
@@ -435,7 +487,7 @@ function onehit_loglhood_total(p_all, times_all, concs, ncells,
     for n in 1:1:ndsets
         p = [p_all[1], p_all[2], p_all[2 + n]]  # kappa, k2, t0 for dataset n
         ll = onehit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
-                        klim0s[n], klim1s[n]; te=te)
+                        klim0s[n], klim1s[n]; te=te_all[n])
         ll_total += ll  # no weighting for now 
     end
     return ll_total
@@ -450,16 +502,19 @@ function twohit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
     if te === nothing
         te = times[min(klim1, length(times))]
     end
-    if k < -10  #(times[1] < t0) || (k <= 0)
+    if (kappa < 0.0) || (k2 < 0.0) || (times[1] < t0)
         ll = -1e8
     else
         # Note that ncell includes those never activated, 
         # whereas times only includes cells eventually activated
         nc0 = klim0 - 1  # number of cells with t_activ = 0
         nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
-        ll = nc0 * log(twohit_cdf([0.0], conc, kappa, k2; t0=t0)[1])
+        lowerlim = max(1, klim0-1)
+        ll = nc0 * log(twohit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
+        # Two-hit pdf also has large cancellation issues
+        # This model is a numerical nightmare. 
         ll += sum(log.(twohit_pdf(times[klim0:klim1-1], conc, kappa, k2; t0=t0)))
-        ll += (ncell - nc0 - nc1) * log(1.0 - twohit_cdf([te], conc, kappa, k2; t0=t0)[1])
+        ll += (ncell - nc0 - nc1) * log(twohit_ccdf([te], conc, kappa, k2; t0=t0)[1])
     end
     return ll
 end
@@ -469,17 +524,16 @@ end
 Log-likelihood across datasets for the 2-hit model
 """
 function twohit_loglhood_total(p_all, times_all, concs, ncells, 
-            klim0s, klim1s; tes=nothing)
+            klim0s, klim1s; te_all=nothing)
     # From the lists of times, klim0s, klim1s, ncells
     # compute likelihood contribution from each dataset, 
     # with one t0 per dataset, and combine at the end. 
     ndsets = length(concs)
     ll_total = 0.0
     for n in 1:1:ndsets
-        te = nothing ? tes === nothing : tes[n]
         p = [p_all[1], p_all[2], p_all[2 + n]]  # kappa, k2, t0 for dataset n
         ll = twohit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
-                        klim0s[n], klim1s[n]; te=te)
+                        klim0s[n], klim1s[n]; te=te_all[n])
         ll_total += ll  # no weighting for now 
     end
     return ll_total
@@ -547,8 +601,8 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
     # kappa estimate: diffusion-limited, 0.4 pM^-1 s^-1, 
     # times default concentration scale of 1 pM. 
     # k2 estimate: fast to begin with
-    lower = [1e-3, 1e-3]  # kappa, k2
-    upper = [20.0, 1e3]
+    lower = [1e-4, 1e-4]  # kappa, k2
+    upper = [20.0, 1e2]
     init_p = [0.4, 10.0]
     
     # For each dataset in the list of datasets, prepare the cdf, 
@@ -577,15 +631,15 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
         push!(k0_all, ilim0)
         push!(k1_all, ilim1)
         push!(te_all, tlim)
-        # Limits for parameter t0 for each dataset
+        # Limits for parameter t0 for each dataset: first recorded time point
         push!(lower, -20.0)
-        push!(upper, -1e-6)
+        push!(upper, tu[1]-1e-3)
         push!(init_p, -0.1)
     end
 
     # Minimize -log likelihood
-    cost = p_all -> -loglfct(p_all, tunique_all, concs_all, ncells_all, 
-                        k0_all, k1_all; te_all, ncells, ilim0)
+    cost = p_all -> -loglfct(p_all, tunique_all, concs_all, ncell_all, 
+                        k0_all, k1_all; te_all=te_all)
     inner_optimizer = IPNewton()  # or NelderMead()
     #println("Start linear fit with data points: ", tu)
     
@@ -602,7 +656,7 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
     flag = Optim.converged(results)
     if !flag
         println("Did not converge for cdfhresh = ", cdfthresh)
-        println("ilim1 = ", ilim1, " , ncells = ", ncells, " , init_p = ", init_p)
+        println("k1_all = ", k1_all, " , ncells = ", ncell_all, " , init_p = ", init_p)
     end
 
     # RMS error on the cdf across all datasets
@@ -622,7 +676,28 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
     evid, evid_err = hcubature(lhood, lower, upper)
     rmserr = 1.0/evid  # inverse evidence should be minimized
     =#
-    result = Array{Float64}(hcat(fit_params, [tlim1, rmserr]))
+    result = Array{Float64}(vcat(fit_params, [rmserr]))
 
     return result
+end
+
+
+function (@main)(_)
+
+    t0 = -0.001
+    trange = collect(0.0:0.01:20.0)
+    kappa = 0.4557859788980265
+    conc = 1.0
+    k2 = 0.45591241085513795
+    pdfrange1 = onehit_pdf(trange, conc, kappa, k2; t0=t0)
+    pdfrange2 = twohit_pdf(trange, conc, kappa, k2; t0=t0)
+    cdfrange1 = onehit_cdf(trange, conc, kappa, k2; t0=t0)
+    cdfrange2 = twohit_cdf(trange, conc, kappa, k2; t0=t0)
+    p = pl.plot(trange, pdfrange1, label="pdf 1", legend=:topright)
+    pl.plot!(p, trange, pdfrange2, label="pdf 2")
+    pl.plot!(p, trange, cdfrange1, label="1", legend=:topright)
+    pl.plot!(p, trange, cdfrange2, label="2")
+    pl.savefig(p, "temp.png")
+    display(p)
+    return 0
 end
