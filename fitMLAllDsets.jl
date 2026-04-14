@@ -55,14 +55,14 @@ function fit_ml_all_datasets(;
     # Filter to keep only the approved list of datasets
     # (excluding low cell count or duplicate datasets)
     approved_files = [
-        "pHELD-AF594_10pM_2_z2.csv", 
         "pHELD-AF594_10pM_z2.csv", 
+        "pHELD-AF594_10pM_2_z2.csv", 
         "pHELD-AF594_1pM_2.csv", 
         #"pHELD-AF594_1pM.csv",   # low cell count, dropped dataset
-        "pHELD-AF594_0.1pM_2.csv", 
         "pHELD-AF594_0.1pM.csv",
-        "pHELD-AF594_0.01pM_2.csv", 
-        "pHELD-AF594_0.01pM.csv"
+        "pHELD-AF594_0.1pM_2.csv", 
+        "pHELD-AF594_0.01pM.csv", 
+        "pHELD-AF594_0.01pM_2.csv"
     ]
     fnames = collect(fp for fp in fnames if fp in approved_files)
     fpaths = collect(joinpath(datadir, f) for f in fnames)
@@ -70,6 +70,14 @@ function fit_ml_all_datasets(;
     if isempty(fpaths)
         error("No approved CSV files found in $datadir")
     end
+
+    # Sort names in decreasing concentration order
+    # Extract concentration of each name
+    shortnames, lblconcs = cleannames(fnames)
+    sortidx = reverse(sortperm(lblconcs), dims=1)
+    shortnames = shortnames[sortidx]
+    fnames = fnames[sortidx]
+    fpaths = fpaths[sortidx]
     
     println("\n" * "="^70)
     println("MAXIMUM LIKELIHOOD FITTING - JR064 DATASETS")
@@ -171,11 +179,12 @@ function fit_ml_all_datasets(;
     println("="^70 * "\n")
     
     return (onehit_params, twohit_params, onehit_rms, twohit_rms,
-            nicenames, tactiv_alldsets, tunique_all, cumuls_all)
+            nicenames, tactiv_alldsets)
 end
 
 
 # Run the analysis
 function (@main)(_)
-    fit_ml_all_datasets(fracabove=0.6, cdfthresh=0.5)
+    fit_ml_all_datasets(fracabove=0.8, cdfthresh=0.6)
+    return 0
 end

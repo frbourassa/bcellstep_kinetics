@@ -416,9 +416,8 @@ function twohit_cdf_float(t::Float64, conc::Float64,
         term1 = fact1 * (1.0 - exp(-kc * tt0))
         term2 = fact2 * (1.0 - exp(-k2 * tt0))
         cdf = prefact * (term1 - tt0ekct0 + term2)
-        # Just can't prevent those large cancellation errors apparently
-        cdf = clamp(cdf, 1e-12, 1.0 - 1e-12)
     end
+    cdf = clamp(cdf, 1e-12, 1.0 - 1e-12)
     return cdf
 end
 
@@ -601,9 +600,9 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
     # kappa estimate: diffusion-limited, 0.4 pM^-1 s^-1, 
     # times default concentration scale of 1 pM. 
     # k2 estimate: fast to begin with
-    lower = [1e-4, 1e-4]  # kappa, k2
-    upper = [20.0, 1e2]
-    init_p = [0.4, 10.0]
+    lower = [1e-4, 1e-3]  # kappa, k2
+    upper = [20.0, 20.0]
+    init_p = [0.4, 1.0]
     
     # For each dataset in the list of datasets, prepare the cdf, 
     # numbers of cells, concentrations, and limits for the fit.

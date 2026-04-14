@@ -33,9 +33,22 @@ function plot_single_dataset_cdf(tactiv, name, duration, cdfthresh,
                                   kappa1, k2_1, t0_1,
                                   kappa2, k2_2, t0_2,
                                   cdffct1, cdffct2)
-    
+    # Print info to trace back issues
+    println("For dataset:", name)
+    println("Duration:", duration)
+    println("cdfthresh:", cdfthresh)
+    println("kappa1:", kappa1)
+    println("k2_1:", k2_1)
+    println("t0_1:", t0_1)
+    println("kappa2:", kappa2)
+    println("k2_2:", k2_2)
+    println("t0_2:", t0_2)
+
     # Prepare empirical CDF
     tu, cumul, ilim1, ncells, tlim = prepcdf(tactiv, cdfthresh, duration)
+    println("Number of activ times:", length(tu))
+    println("ncells:", ncells)
+    println("tlim:", tlim)
     ilim0 = findfirst(tu .> 0.0)
     rms_i = (ilim1 > ilim0) ? ilim0 : 1
     conc_scale = 1.0  # pM
@@ -59,7 +72,7 @@ function plot_single_dataset_cdf(tactiv, name, duration, cdfthresh,
                 markersize=4, label=nothing, alpha=0.6)
     
     # Generate smooth curves for model fits over the fitting range
-    trange = collect(LinRange(0, tlim + 0.1*tlim, 150))
+    trange = collect(LinRange(0, tu[end], 150))
     
     # One-hit model
     cdf1 = cdffct1(trange, conc, kappa1, k2_1; t0=t0_1)
@@ -128,7 +141,7 @@ function plot_ml_cdf_comparison(tactiv_alldsets, nicenames, durations, cdfthresh
         kappa_2, k2_2, t0_2 = twohit_params[1], twohit_params[2], twohit_params[2+i]
         
         # Generate smooth curves
-        trange = collect(LinRange(0, tlim + 0.1*tlim, 100))
+        trange = collect(LinRange(0, tu[end], 100))
         
         cdf1 = onehit_cdf(trange, conc, kappa_1, k2_1; t0=t0_1)
         y1 = cdf1 .* ncells
@@ -139,7 +152,7 @@ function plot_ml_cdf_comparison(tactiv_alldsets, nicenames, durations, cdfthresh
         # Plot on subplot i
         pl.plot!(p[i], goodt, ncumul, linetype=:steppost,
                  color=:black, linewidth=2, label="Data", alpha=0.7, 
-                 legend=:bottomleft, legendfontsize=8)
+                 legend=:bottomright, legendfontsize=8)
         
         pl.scatter!(p[i], tu, cumul .* ncells, color=:black,
                     markersize=3, label=nothing, alpha=0.5)
@@ -156,8 +169,8 @@ function plot_ml_cdf_comparison(tactiv_alldsets, nicenames, durations, cdfthresh
     end
     
     # Add overall title with RMS comparison
-    title_text = @sprintf "ML Fits: %d dataset(s) | RMS: 1-hit=%.2e, 2-hit=%.2e" n_dsets onehit_rms twohit_rms
-    pl.plot!(title=title_text, plot_title_fontsize=12)
+    #title_text = @sprintf "ML Fits: %d dataset(s) | RMS: 1-hit=%.2e, 2-hit=%.2e" n_dsets onehit_rms twohit_rms
+    #pl.plot!(title=title_text, plot_title_fontsize=12)
     
     return p
 end
