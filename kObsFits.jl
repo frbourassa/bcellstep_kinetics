@@ -279,6 +279,8 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh)
 end
 
 
+
+
 """
 Create a multi-panel plot comparing the empirical normalized CDFs to
 fitted exponential model curves for each dataset.
@@ -291,7 +293,7 @@ Arguments:
 - overall_rms: overall RMS error for the fit
 - durations: list of experiment durations
 """
-function plot_ml_cdf_comparison(cdf_prep_results, nicenames, 
+function plot_ml_cdf_comparison_old(cdf_prep_results, nicenames, 
             fit_params, cdffct, overall_rms, durations)
     (concs_all, ncell_all, k0_all, k1_all, 
                 te_all, tu_all, cumuls_all) = cdf_prep_results
@@ -336,6 +338,66 @@ function plot_ml_cdf_comparison(cdf_prep_results, nicenames,
     end
 
     pl.plot!(p[1], title=@sprintf("Exponential fit for %d datasets | RMS = %.3e", n_dsets, overall_rms), plot_title_fontsize=12)
+    return p
+end
+
+"""
+Create a single-panel plot comparing the empirical normalized CDFs to
+fitted exponential model curves for each dataset.
+
+Arguments:
+- cdf_prep_results: output from prepare_all_cdfs
+- nicenames: list of dataset names
+- fit_params: 2 x n_dsets array of [k; t0] per dataset
+- cdffct: exponential CDF function to plot
+- overall_rms: overall RMS error for the fit
+- durations: list of experiment durations
+"""
+function plot_ml_cdf_comparison(cdf_prep_results, nicenames, 
+            fit_params, cdffct, overall_rms, durations)
+    (concs_all, ncell_all, k0_all, k1_all, 
+                te_all, tu_all, cumuls_all) = cdf_prep_results
+    n_dsets = length(tu_all)
+
+    lblconcs = [concfromstr(name, "pM", ' ') for name in nicenames]
+    if any(x -> x === nothing, lblconcs)
+        error("Some dataset names do not contain a parsable concentration value")
+    end
+    conc_labels = [@sprintf("%.3g", c) for c in lblconcs]
+    colors = pl.cgrad(:magma)
+
+    tplotlim = [-5.0, maximum([maximum(a) for a in tu_all]) * 1.05]
+    fracplotlim = [-0.05, 1.05]
+
+    p = pl.plot(size=(900, 600), left_margin=3mm, right_margin=3mm,
+                bottom_margin=3mm, xlabel="Time (s)", ylabel="Fraction active cells",
+                xlim=tplotlim, ylim=fracplotlim, legend=:bottomright,
+                tickfont=pl.font(13), legendfont=pl.font(11), legendfontsize=11,
+                titlefontsize=12, legendmargin=8mm)
+
+    for i in 1:n_dsets
+        tu = tu_all[i]
+        cumul = cumuls_all[i]
+        ilim1 = k1_all[i]
+
+        goodt = vcat([0.0], tu)
+        ncumul = vcat([0.0], cumul)
+
+        k = fit_params[1, i]
+        t0 = fit_params[2, i]
+        trange = collect(LinRange(0, durations[i], 200))
+        yfit = cdffct(trange, k; t0=t0)
+        line_color = colors[(i-1)/(n_dsets)]
+        conc_label = conc_labels[i]
+
+        pl.plot!(p, goodt, ncumul, linetype=:steppost,
+                 color=:grey, linewidth=3.0, label="Data $conc_label pM", alpha=0.8)
+        pl.scatter!(p, tu, cumul, color=:grey, markersize=3,
+                    label=nothing, alpha=0.6)
+        pl.plot!(p, trange, yfit, label="\$k_{\\mathrm{obs}}\$ fit " * conc_label * " pM",
+                 color=line_color, linewidth=4.4, linestyle=:solid)
+    end
+
     return p
 end
 
