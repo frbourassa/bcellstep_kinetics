@@ -899,6 +899,6 @@ end
 
 # Run the analysis
 function (@main)(_)
-    fit_ml_all_datasets(fracabove=0.8, cdfthresh=1.0)
+    fit_ml_all_datasets(fracabove=0.8, cdfthresh=0.75)
     return 0
 end

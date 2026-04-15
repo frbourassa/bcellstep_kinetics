@@ -250,8 +250,8 @@ end
 
 function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh)
     n_dsets = length(tactiv_alldsets)
-    res = prepare_all_cdfs(tactiv_alldsets, dsetnames, durations, cdfthresh)
-    concs_all, ncell_all, k0_all, k1_all, te_all, tu_all, cumuls_all = res
+    prepres = prepare_all_cdfs(tactiv_alldsets, dsetnames, durations, cdfthresh)
+    concs_all, ncell_all, k0_all, k1_all, te_all, tu_all, cumuls_all = prepres
 
     fit_params = zeros(Float64, 2, n_dsets)
     for i in 1:n_dsets
@@ -275,7 +275,7 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh)
 
     rms_errors, overall_rms = compute_rms_all_dsets(fit_params, 
                                 tu_all, cumuls_all, k0_all, k1_all, expocdf)
-    return fit_params, rms_errors, overall_rms
+    return fit_params, rms_errors, overall_rms, prepres
 end
 
 
@@ -387,15 +387,18 @@ function plot_ml_cdf_comparison(cdf_prep_results, nicenames,
         t0 = fit_params[2, i]
         trange = collect(LinRange(0, durations[i], 200))
         yfit = cdffct(trange, k; t0=t0)
-        line_color = colors[(i-1)/(n_dsets)]
+        line_color = colors[(2*i-2)/(2*n_dsets-1)]
         conc_label = conc_labels[i]
 
         pl.plot!(p, goodt, ncumul, linetype=:steppost,
                  color=:grey, linewidth=3.0, label="Data $conc_label pM", alpha=0.8)
+        # Legend spacing
+        pl.scatter!(p, [minimum(tu)],[0], label=" ", ms=0, mc=:white, msc=:white)
         pl.scatter!(p, tu, cumul, color=:grey, markersize=3,
                     label=nothing, alpha=0.6)
         pl.plot!(p, trange, yfit, label="\$k_{\\mathrm{obs}}\$ fit " * conc_label * " pM",
                  color=line_color, linewidth=4.4, linestyle=:solid)
+        pl.scatter!(p, [minimum(tu)],[0], label=" ", ms=0, mc=:white, msc=:white)
     end
 
     return p
@@ -437,7 +440,7 @@ end
 
 function fit_ml_all_datasets(; 
     datadir="data/JR064_tracks",
-    plotdir="figures/ml_fits_kobs/",
+    plotdir="figures/ml_fits_kobs_norm1/",
     fracabove=0.6,
     cdfthresh=0.5)
     
@@ -455,15 +458,16 @@ function fit_ml_all_datasets(;
     
     # Filter to keep only the approved list of datasets
     # (excluding low cell count or duplicate datasets)
+    # Depending on which 4 we pick, can get very nice behavior with c or not. 
     approved_files = [
         "pHELD-AF594_10pM_z2.csv", 
-        "pHELD-AF594_10pM_2_z2.csv", 
+        "pHELD-AF594_10pM_2_z2.csv", #too sharp to claim cell activation-limited?
         "pHELD-AF594_1pM_2.csv", 
         #"pHELD-AF594_1pM.csv",   # low cell count, dropped dataset
         "pHELD-AF594_0.1pM.csv",
-        "pHELD-AF594_0.1pM_2.csv", 
-        "pHELD-AF594_0.01pM.csv", 
-        "pHELD-AF594_0.01pM_2.csv"
+        "pHELD-AF594_0.1pM_2.csv", # weird, looks like 0.01 pm
+        "pHELD-AF594_0.01pM.csv",  #nicer, no early activated cells
+        "pHELD-AF594_0.01pM_2.csv"  #less nice fit
     ]
     fnames = collect(fp for fp in fnames if fp in approved_files)
     fpaths = collect(joinpath(datadir, f) for f in fnames)
@@ -499,7 +503,7 @@ function fit_ml_all_datasets(;
     println("Fitting exponential model for each dataset separately...")
     println("-"^70)
     fitres = fitmodel(tactiv_alldsets, nicenames, durations, cdfthresh)
-    fit_params, rms_errors, overall_rms = fitres
+    fit_params, rms_errors, overall_rms, prep_cdf_res = fitres
 
     println("\nExponential fit results:")
     for i in 1:n_dsets
@@ -509,6 +513,7 @@ function fit_ml_all_datasets(;
     println(@sprintf("\nOverall RMS = %.3e", overall_rms))
 
     # Select one dataset per concentration for plotting
+    #=
     lblconcs = [concfromstr(name, "pM", ' ') for name in nicenames]
     unique_concs = unique(sort(filter(x -> x !== nothing, lblconcs)))
     selected_indices = Int[]
@@ -518,7 +523,11 @@ function fit_ml_all_datasets(;
         max_idx = indices_for_conc[argmax(cells_for_conc)]
         push!(selected_indices, max_idx)
     end
-
+    =#
+    # Manual selection, to show we can get different appearances
+    selected_indices = Int[6, 4, 3, 1]
+    println(selected_indices)
+    sind = join((string(a) for a in selected_indices), "")
     selected_tactiv = tactiv_alldsets[selected_indices]
     selected_durations = durations[selected_indices]
     selected_names = nicenames[selected_indices]
@@ -534,16 +543,16 @@ function fit_ml_all_datasets(;
     println("Generating plots...")
     println("-"^70)
 
-    prep_cdf_res = prepare_all_cdfs(selected_tactiv, selected_names, selected_durations, cdfthresh)
+    selected_cdf_prep = collect(a[selected_indices] for a in prep_cdf_res)
 
-    p_all = plot_ml_cdf_comparison(prep_cdf_res, selected_names, selected_fit_params, 
+    p_all = plot_ml_cdf_comparison(selected_cdf_prep, selected_names, selected_fit_params, 
                         expocdf, overall_rms, selected_durations)
-    plot_file = joinpath(plotdir, "exp_cdf_all_datasets.pdf")
+    plot_file = joinpath(plotdir, "exp_cdf_all_datasets_$(sind).pdf")
     pl.savefig(p_all, plot_file)
     println("  Saved: $plot_file")
 
     p_conc = plot_kobs_vs_concentration(selected_names, selected_fit_params, prep_cdf_res[2])
-    plot_file = joinpath(plotdir, "exp_k_vs_concentration.pdf")
+    plot_file = joinpath(plotdir, "exp_k_vs_concentration_$(sind).pdf")
     pl.savefig(p_conc, plot_file)
     println("  Saved: $plot_file")
 
