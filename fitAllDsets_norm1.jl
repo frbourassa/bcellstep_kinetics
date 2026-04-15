@@ -228,7 +228,7 @@ function onehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
         else
             ll = 0.0
         end
-        ll += sum(log.(onehit_pdf(times[klim0:klim1-1], conc, kappa, k2; t0=t0)))
+        ll += sum(log.(onehit_pdf(times[klim0:klim1], conc, kappa, k2; t0=t0)))
         if nc2 > 0
             ll += nc2 * log(onehit_ccdf([te], conc, kappa, k2; t0=t0)[1])
         end
@@ -251,7 +251,7 @@ function onehit_loglhood_total(p_all, times_all, concs, ncells,
         p = [p_all[1], p_all[2], p_all[2 + n]]  # kappa, k2, t0 for dataset n
         ll = onehit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
                         klim0s[n], klim1s[n]; te=te_all[n])
-        ll_total += ll / ncells[n]
+        ll_total += ll
     end
     return ll_total
 end
@@ -281,7 +281,7 @@ function twohit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
         end
         # Two-hit pdf also has large cancellation issues
         # This model is a numerical nightmare. 
-        ll += sum(log.(twohit_pdf(times[klim0:klim1-1], conc, kappa, k2; t0=t0)))
+        ll += sum(log.(twohit_pdf(times[klim0:klim1], conc, kappa, k2; t0=t0)))
         if nc2 > 0
             ll += nc2 * log(twohit_ccdf([te], conc, kappa, k2; t0=t0)[1])
         end
@@ -304,7 +304,7 @@ function twohit_loglhood_total(p_all, times_all, concs, ncells,
         p = [p_all[1], p_all[2], p_all[2 + n]]  # kappa, k2, t0 for dataset n
         ll = twohit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
                         klim0s[n], klim1s[n]; te=te_all[n])
-        ll_total += ll / ncells[n] 
+        ll_total += ll 
     end
     return ll_total
 end

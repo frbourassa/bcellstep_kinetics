@@ -171,10 +171,17 @@ function onehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
         # whereas times only includes cells eventually activated
         nc0 = klim0 - 1  # number of cells with t_activ = 0
         nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
+        nc2 = (ncell - nc0 - nc1)
         lowerlim = max(1, klim0-1)
-        ll = nc0 * log(onehit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
-        ll += sum(log.(onehit_pdf(times[klim0:klim1-1], conc, kappa, k2; t0=t0)))
-        ll += (ncell - nc0 - nc1) * log(onehit_ccdf([te], conc, kappa, k2; t0=t0)[1])
+        if nc0 > 0
+            ll = nc0 * log(onehit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
+        else
+            ll = 0.0
+        end
+        ll += sum(log.(onehit_pdf(times[klim0:klim1], conc, kappa, k2; t0=t0)))
+        if nc2 > 0
+            ll += nc2 * log(onehit_ccdf([te], conc, kappa, k2; t0=t0)[1])
+        end
     end
     return ll
 end
@@ -215,12 +222,19 @@ function twohit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
         # whereas times only includes cells eventually activated
         nc0 = klim0 - 1  # number of cells with t_activ = 0
         nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
+        nc2 = ncell - nc0 - nc1
         lowerlim = max(1, klim0-1)
-        ll = nc0 * log(twohit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
+        if nc0 > 0
+            ll = nc0 * log(twohit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
+        else
+            ll = 0.0
+        end
         # Two-hit pdf also has large cancellation issues
         # This model is a numerical nightmare. 
-        ll += sum(log.(twohit_pdf(times[klim0:klim1-1], conc, kappa, k2; t0=t0)))
-        ll += (ncell - nc0 - nc1) * log(twohit_ccdf([te], conc, kappa, k2; t0=t0)[1])
+        ll += sum(log.(twohit_pdf(times[klim0:klim1], conc, kappa, k2; t0=t0)))
+        if nc2 > 0
+            ll += nc2 * log(twohit_ccdf([te], conc, kappa, k2; t0=t0)[1])
+        end
     end
     return ll
 end
