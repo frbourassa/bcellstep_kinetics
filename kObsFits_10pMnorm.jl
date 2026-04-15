@@ -425,6 +425,80 @@ function plot_ml_cdf_comparison(cdf_prep_results, nicenames,
     return p
 end
 
+function make_paired_colors(nicenames)
+    lblconcs = [concfromstr(name, "pM", ' ') for name in nicenames]
+    if any(x -> x === nothing, lblconcs)
+        error("Some dataset names do not contain a parsable concentration value")
+    end
+    n_dsets = length(nicenames)
+    tab20 = pl.palette(:tab20, 20)
+    conc_colors = Dict(
+        0.01 => (tab20[1], tab20[2]),
+        0.1  => (tab20[3], tab20[4]),
+        10.0 => (tab20[5], tab20[6]),
+        1.0  => (tab20[7], tab20[8])
+    )
+
+    grouped_indices = Dict{Float64, Vector{Int}}()
+    for i in 1:n_dsets
+        c = lblconcs[i]
+        push!(get!(grouped_indices, c, Int[]), i)
+    end
+
+    line_colors = Vector{Any}(undef, n_dsets)
+    for (conc, inds) in grouped_indices
+        if !haskey(conc_colors, conc)
+            conc_colors[conc] = (tab20[9], tab20[10])
+        end
+        pair = conc_colors[conc]
+        if length(inds) == 1
+            line_colors[inds[1]] = pair[1]
+        else
+            line_colors[inds[1]] = pair[1]
+            line_colors[inds[2]] = pair[2]
+            for j in 3:length(inds)
+                line_colors[inds[j]] = pair[1]
+            end
+        end
+    end
+    return grouped_indices, line_colors
+end
+
+
+"""
+Plot all empirical CDF replicates (data only, no model fit).
+Each dataset gets its own line+scatter entry, with paired colors for
+replicate datasets of the same concentration.
+"""
+function plot_replicate_cdfs(cdf_prep_results, nicenames)
+    (concs_all, ncell_all, k0_all, k1_all, 
+                te_all, tu_all, cumuls_all) = cdf_prep_results
+    n_dsets = length(tu_all)
+
+    grouped_indices, line_colors = make_paired_colors(nicenames)
+
+    tplotlim = [-5.0, maximum([maximum(tu) for tu in tu_all]) * 1.05]
+    fracplotlim = [-0.05, 1.05]
+
+    p = pl.plot(size=(900, 600), left_margin=3mm, right_margin=3mm,
+                bottom_margin=3mm, xlabel="Time (s)", ylabel="Fraction active cells",
+                xlim=tplotlim, ylim=fracplotlim, legend=:outerright, labelfont=pl.font(14),
+                tickfont=pl.font(13), legendfont=pl.font(11), legendfontsize=11,
+                title="Empirical CDF replicates", titlefontsize=14)
+
+    for i in 1:n_dsets
+        tu = tu_all[i]
+        cumul = cumuls_all[i]
+        color_i = line_colors[i]
+        pl.plot!(p, vcat([0.0], tu), vcat([0.0], cumul), linetype=:steppost,
+                 color=color_i, linewidth=3.0, label=nicenames[i], alpha=0.9)
+        pl.scatter!(p, tu, cumul, color=color_i, markersize=4,
+                    label=nothing, alpha=0.8)
+    end
+
+    return p
+end
+
 
 """
 Plot fitted k_obs for each dataset as a function of concentration. 
@@ -457,11 +531,49 @@ function plot_kobs_vs_concentration(nicenames, fit_params, ncell_all)
 end
 
 
+"""
+Plot fitted k_obs for all replicate datasets on a log-log scale.
+Also overlay the diffusion-limited line k_obs = k0 * c with k0 = 0.4 pM^-1 s^-1.
+"""
+function plot_kobs_replicates_loglog(nicenames, fit_params)
+    lblconcs = [concfromstr(name, "pM", ' ') for name in nicenames]
+    valid = findall(x -> x !== nothing, lblconcs)
+    if length(valid) != length(lblconcs)
+        error("Some dataset names do not contain a parsable concentration value")
+    end
+
+    n_dsets = length(lblconcs)
+    fitted_ks = [fit_params[1, i] for i in 1:n_dsets]
+    grouped_indices, line_colors = make_paired_colors(nicenames)
+
+    p = pl.plot(size=(900, 600), left_margin=3mm, right_margin=3mm,
+                bottom_margin=3mm, xlabel="Concentration (pM)",
+                ylabel=raw"Fitted rate $k_\mathrm{obs} (s^{-1})$",
+                xscale=:log10, yscale=:log10, labelfont=pl.font(14),
+                tickfont=pl.font(13), legendfontsize=12)
+
+    for i in 1:n_dsets
+        color_i = line_colors[i]
+        pl.scatter!(p, [lblconcs[i]], [fitted_ks[i]], color=line_colors[i],
+                    marker=:circle, markersize=6, label=nicenames[i], alpha=0.9)
+    end
+
+    k0 = 0.4
+    c_line = collect(LinRange(minimum(lblconcs) * 0.8, maximum(lblconcs) * 1.2, 100))
+    k_line = k0 .* c_line
+    pl.plot!(p, c_line, k_line, linestyle=:dash, color=:black,
+             linewidth=2.5, label=raw"Diffusion-limited rate")
+
+    return p
+end
+
+
+
 ### MAIN ANALYSIS FUNCTION ###
 
 function fit_ml_all_datasets(; 
     datadir="data/JR064_tracks",
-    plotdir="figures/ml_fits_kobs_10pMnprm/",
+    plotdir="figures/ml_fits_kobs_10pMnorm/",
     fracabove=0.6,
     cdfthresh=0.5)
     
@@ -548,7 +660,7 @@ function fit_ml_all_datasets(;
     end
     =#
     # Manual selection, to show we can get different appearances
-    selected_indices = Int[7, 5, 3, 2]
+    selected_indices = Int[7, 4, 3, 2]
     sind = join((string(a) for a in selected_indices), "")
     selected_tactiv = tactiv_alldsets[selected_indices]
     selected_durations = durations[selected_indices]
@@ -576,6 +688,16 @@ function fit_ml_all_datasets(;
     p_conc = plot_kobs_vs_concentration(selected_names, selected_fit_params, prep_cdf_res[2])
     plot_file = joinpath(plotdir, "exp_k_vs_concentration_$(sind).pdf")
     pl.savefig(p_conc, plot_file)
+    println("  Saved: $plot_file")
+
+    p_repl = plot_kobs_replicates_loglog(nicenames, fit_params)
+    plot_file = joinpath(plotdir, "exp_kobs_replicates_loglog.pdf")
+    pl.savefig(p_repl, plot_file)
+    println("  Saved: $plot_file")
+
+    p_data = plot_replicate_cdfs(prep_cdf_res, nicenames)
+    plot_file = joinpath(plotdir, "all_empirical_cdfs.pdf")
+    pl.savefig(p_data, plot_file)
     println("  Saved: $plot_file")
 
     println("\n" * "="^70)
