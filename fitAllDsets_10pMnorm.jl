@@ -26,7 +26,6 @@ using Printf: @sprintf
 using Statistics: mean
 using Measures: mm
 using Optim: Optim, optimize, IPNewton
-using Random: rand
 using LinearAlgebra: UniformScaling, diag, diagm, svd
 
 
@@ -47,47 +46,6 @@ function expocdf(t::Array, rate::Float64; t0::Float64=0.0)
     rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
     cdf = 1.0 .- exp.(-rtt0)
     return cdf
-end
-
-function expoccdf(t::Array, rate::Float64; t0::Float64=0.0)
-    rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
-    return exp.(-rtt0)
-end
-
-function logexpopdf(t::Array, rate::Float64; t0::Float64=0.0)
-    rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
-    return log(rate) .- rtt0
-end
-
-function logexpoccdf(t::Array, rate::Float64; t0::Float64=0.0)
-    rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
-    return -rtt0
-end
-
-function expo_loglhood_1dset(p, times, ncell, klim0, klim1; te=nothing)
-    k, t0 = p
-    if te === nothing
-        te = times[min(klim1, length(times))]
-    end
-    if (k < 0.0) || (times[1] < t0)
-        return -1e8
-    end
-
-    nc0 = klim0 - 1
-    nc1 = klim1 - nc0
-    nc2 = ncell - nc0 - nc1
-
-    ll = 0.0
-    if nc0 > 0
-        ll += nc0 * log(expocdf([0.0], k; t0=t0)[1])
-    end
-    if klim1 >= klim0
-        ll += sum(logexpopdf(times[klim0:klim1], k; t0=t0))
-    end
-    if nc2 > 0
-        ll += nc2 * logexpoccdf([te], k; t0=t0)[1]
-    end
-    return ll
 end
 
 
@@ -132,55 +90,6 @@ function onehit_ccdf(t::Array, conc::Float64,
     #fctpart = exp.(-kc .* tt0) .* (k2 .- kc .* exp.(-kdiff .* tt0))
     ccdf = fctpart ./ kdiff
     return ccdf
-end
-
-""" Inverse CDF of the 1-hit model """
-function onehit_inverse_cdf_scalar(u::Float64, conc::Float64, 
-    kappa::Float64, k2::Float64; t0::Float64=0.0)
-    if u <= 0.0
-        return t0
-    elseif u >= 1.0
-        # Return a large value if u is effectively 1.0.
-        return t0 + 1e4
-    end
-
-    cdf_minus_u = t -> onehit_cdf([t], conc, kappa, k2; t0=t0)[1] - u
-    lower = t0
-    upper = t0 + 10.0 * max(1.0 / (kappa * conc), 1.0 / k2, 1.0)
-    while cdf_minus_u(upper) < 0.0
-        upper *= 2.0
-        if upper > t0 + 1e6
-            break
-        end
-    end
-
-    a = lower
-    b = upper
-    fa = cdf_minus_u(a)
-    fb = cdf_minus_u(b)
-    if fa > 0.0 || fb < 0.0
-        error("Could not bracket inverse CDF for u=$u, conc=$conc")
-    end
-
-    for _ in 1:80
-        m = 0.5 * (a + b)
-        fm = cdf_minus_u(m)
-        if abs(fm) < 1e-10 || abs(b - a) < 1e-8
-            return m
-        elseif fa * fm <= 0.0
-            b = m
-            fb = fm
-        else
-            a = m
-            fa = fm
-        end
-    end
-    return 0.5 * (a + b)
-end
-
-function onehit_inverse_cdf(u::Array, conc::Float64, 
-    kappa::Float64, k2::Float64; t0::Float64=0.0)
-    return [onehit_inverse_cdf_scalar(ui, conc, kappa, k2; t0=t0) for ui in u]
 end
 
 
@@ -824,89 +733,6 @@ function plot_models_vs_concentration(nicenames, ncell_all, onehit_params, twohi
 end
 
 
-function fit_exponential_times(times::Array{Float64,1}, ncell::Int, te::Float64)
-    klim0 = findfirst(x -> x > 0.0, times)
-    klim0 = isnothing(klim0) ? 1 : klim0
-    klim1 = length(times)
-
-    lower = [1e-6, -20.0]
-    upper = [10.0, te - 1e-3]
-    init_p = [0.1, -0.1]
-
-    cost = p -> -expo_loglhood_1dset(p, times, ncell, klim0, klim1; te=te)
-    inner_optimizer = IPNewton()
-    results = optimize(cost, lower, upper, init_p, inner_optimizer)
-    if !Optim.converged(results)
-        println("Warning: exponential fit did not converge for synthetic dataset")
-    end
-    return Optim.minimizer(results)
-end
-
-
-function fit_plot_kobs_on_model(nicenames, onehit_params, onehit_cdf, 
-        prep_cdf_res, durations)
-    lblconcs = [concfromstr(name, "pM", ' ') for name in nicenames]
-    if any(x -> x === nothing, lblconcs)
-        error("Some dataset names do not contain a parsable concentration value")
-    end
-
-    kappa = onehit_params[1]
-    k2 = onehit_params[2]
-    t0s = onehit_params[3:end]
-    ncell_all = prep_cdf_res[2]
-
-    fitted_ks = Float64[]
-    fitted_t0s = Float64[]
-    fitted_concs = Float64[]
-    labels = String[]
-
-    for i in 1:length(nicenames)
-        conc = lblconcs[i]
-        t0 = t0s[i]
-        ncell = ncell_all[i]
-        te = durations[i]
-
-        u = rand(ncell)
-        synthetic_times = sort(onehit_inverse_cdf(u, conc, kappa, k2; t0=t0))
-        observed = synthetic_times[synthetic_times .<= te]
-        if isempty(observed)
-            println("Warning: no synthetic activations observed for dataset $(nicenames[i])")
-            continue
-        end
-
-        fitted_params = fit_exponential_times(observed, ncell, te)
-        push!(fitted_concs, conc)
-        push!(fitted_ks, fitted_params[1])
-        push!(fitted_t0s, fitted_params[2])
-        push!(labels, nicenames[i])
-    end
-
-    if isempty(fitted_concs)
-        error("No synthetic activations were retained for any dataset in fit_plot_kobs_on_model")
-    end
-
-    p = pl.plot(size=(900, 650), xlabel="Concentration (pM)",
-                ylabel=raw"Fitted effective rate $k_{\mathrm{obs}}$ (s^{-1})",
-                xscale=:log10, yscale=:log10,
-                legend=:outerright, left_margin=3mm, right_margin=3mm,
-                bottom_margin=3mm, labelfont=pl.font(12), tickfont=pl.font(13),
-                title="Synthetic one-hit model -> fitted exponential k_{obs}",
-                titlefontsize=14)
-
-    for i in 1:length(fitted_concs)
-        pl.scatter!(p, [fitted_concs[i]], [fitted_ks[i]], marker=:circle,
-                    markersize=8, label=labels[i], alpha=0.85)
-    end
-
-    k0 = 0.4
-    c_line = collect(LinRange(minimum(fitted_concs) * 0.8, maximum(fitted_concs) * 1.2, 120))
-    k_line = k0 .* c_line
-    pl.plot!(p, c_line, k_line, linestyle=:dash, color=:black,
-             linewidth=2.5, label=raw"Diffusion-limited $k_{\mathrm{obs}} = 0.4 c$")
-
-    return p
-end
-
 
 ### MAIN ANALYSIS FUNCTION ###
 
@@ -1060,21 +886,6 @@ function fit_ml_all_datasets(;
                                            onehit_cdf, twohit_cdf, durations)
     plot_file = joinpath(plotdir, "ml_models_vs_concentration.pdf")
     pl.savefig(p_conc, plot_file)
-    println("  Saved: $plot_file")
-
-    # Step 5: k_obs analysis
-    # Generate synthetic data from the fitted 1-hit model at different concentrations
-    # fit a one-step (exponential) model to each curve to get a k_obs
-    # See how k_obs behaves as a function of concentration for a model with
-    # one diffusion-limited step, one cell activation-limited step. 
-    println("\n" * "-"^70)
-    println("Generating k_obs fits and plots...")
-    println("-"^70)
-
-    p_kobs = fit_plot_kobs_on_model(nicenames, onehit_params, onehit_cdf,
-                                    prep_cdf_res, durations)
-    plot_file = joinpath(plotdir, "kobs_on_cellstep_model_curves.pdf")
-    pl.savefig(p_kobs, plot_file)
     println("  Saved: $plot_file")
 
     println("\n" * "="^70)
