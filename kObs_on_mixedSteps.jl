@@ -16,6 +16,7 @@ using Plots: Plots as pl
 using Measures: mm
 using Optim: Optim, optimize, IPNewton
 using DelimitedFiles: readdlm
+using Printf: @sprintf
 
 
 # One-step CDF curve
@@ -155,6 +156,41 @@ function plot_kobs_vs_concentration(k_obs, concs, k1, k2)
 end
 
 
+"""
+Plot the CDFs of the mixed model for different concentrations
+compared to the k_obs fits. 
+"""
+function plot_cdf_vs_kobs_fits(times, cdfpoints, concs, all_params)
+    # Compute k_obs curves
+    n_concs = length(concs)
+    obs_curves = zeros((n_concs, length(times)))
+    for (i, c) in enumerate(concs)
+        pms = all_params[i, :]
+        curve = expocdf(times, pms[1]; t0=pms[2])
+        obs_curves[i, :] = curve[:]
+    end
+
+    # Plot curves
+    # Use magma colormap
+    cmap = pl.cgrad(:magma)
+    p = pl.plot(
+        xlabel="Time (s)", ylabel=raw"Fraction active cells (CDF)",
+        legend=:bottomright, linewidth=3.5,
+        left_margin=3mm, right_margin=3mm, bottom_margin=3mm
+    )
+    
+    for (i, c) in enumerate(concs)
+        color = cmap[i / n_concs]
+        if i % 4 == 0
+            conc_str = @sprintf "%.2f pM" c
+            pl.plot!(p, times, cdfpoints[i, :], ls=:solid, color=color, label=conc_str)
+        else
+            pl.plot!(p, times, cdfpoints[i, :], ls=:solid, color=color, label="")
+        end
+        pl.plot!(p, times, obs_curves[i, :], ls=:dash, color=color, label="")
+    end
+    return p
+end
 
 """ 
 Main function to run the analysis
@@ -184,9 +220,11 @@ function (@main)(_)
 
     # For each, fit k_obs using fitcurve
     all_kobs = zeros(n_curves)
+    all_t0s = zeros(n_curves)
     for i in 1:1:n_curves
         pms = fitcurve(timepoints, curves[i, :], conc_choices[i])
         all_kobs[i] = pms[1]
+        all_t0s[i] = pms[2]
     end
 
     # Plot k_obs as a function of concentration, log-log scale
@@ -194,6 +232,14 @@ function (@main)(_)
     p_conc = plot_kobs_vs_concentration(all_kobs, conc_choices, k1, k2)
     plotdir = joinpath("figures", "model_misc")
     plot_file = joinpath(plotdir, "k_obs_vs_concentration_on_mixedsteps_model.pdf")
+    pl.savefig(p_conc, plot_file)
+    println("Saved: $plot_file")
+
+    # Plot fits vs mixed step model CDF curves.
+    all_fit_params = hcat(all_kobs, all_t0s)
+    p_conc = plot_cdf_vs_kobs_fits(timepoints, curves, conc_choices, all_fit_params)
+    plotdir = joinpath("figures", "model_misc")
+    plot_file = joinpath(plotdir, "cdf_vs_kobs_fits_mixedsteps_model.pdf")
     pl.savefig(p_conc, plot_file)
     println("Saved: $plot_file")
 
