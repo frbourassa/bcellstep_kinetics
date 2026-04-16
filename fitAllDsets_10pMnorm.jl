@@ -27,6 +27,7 @@ using Statistics: mean
 using Measures: mm
 using Optim: Optim, optimize, IPNewton
 using LinearAlgebra: UniformScaling, diag, diagm, svd
+using DelimitedFiles: writedlm
 
 
 # Load the data processing module
@@ -899,6 +900,12 @@ end
 
 # Run the analysis
 function (@main)(_)
-    fit_ml_all_datasets(fracabove=0.8, cdfthresh=0.75)
+    res = fit_ml_all_datasets(fracabove=0.8, cdfthresh=0.75)
+    (onehit_params, twohit_params, onehit_rms, twohit_rms,
+        nicenames, tactiv_alldsets) = res
+    writedlm(joinpath("results", "allDsets_10pMnorm_params1.csv"), 
+        onehit_params, ",")
+    writedlm(joinpath("results", "allDsets_10pMnorm_names.csv"), 
+        nicenames, ",")
     return 0
 end
