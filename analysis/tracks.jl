@@ -235,6 +235,39 @@ function prepalldsets(fpaths; ch="MEAN_INTENSITY_CH2", filterpms=[50, 30.0], fra
 end
 
 
+"""
+Similar but only read and filter trajectories, 
+do not infer activation times. Useful to vary the fluorescence threshold. 
+"""
+function loadalldsets(fpaths; ch="MEAN_INTENSITY_CH2", filterpms=[50, 30.0], disp=true)
+    dfc_alldsets = []
+    for fpath in fpaths
+        dfc = preptrajdata(fpath; ch=ch, filterpms=filterpms)
+        push!(dfc_alldsets, dfc)
+    end
+    fnames = collect(basename(fp) for fp in fpaths)
+    nicenames = cleannames(fnames)[1]
+    return dfc_alldsets, nicenames
+end
+
+
+""" 
+Now, given pre-loaded DataFrames, process tracks to activation times
+"""
+function threshalldsets(all_dfcs, nicenames, fracabove; disp=true)
+    tactiv_alldsets = []
+    durations_alldsets = []
+    for i in 1:1:length(nicenames)
+        dfc = all_dfcs[i]
+        duration = maximum(dfc.TIME)
+        tactiv, _, _ = findactivtimes_thresh(dfc; fracabove=fracabove, disp=disp)
+        push!(tactiv_alldsets, tactiv)
+        push!(durations_alldsets, duration)
+    end
+    return tactiv_alldsets, durations_alldsets
+end
+
+
 ### CDF PREPARATION ###
 
 """

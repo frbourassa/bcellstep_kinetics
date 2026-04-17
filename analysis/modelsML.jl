@@ -262,7 +262,7 @@ function threehit_cdf(t::Array, conc::Float64,
     cdf .-= ((0.5 * kc*kc * k2) / kdif) .* (tt0 .* tt0) .* exptt0
     cdf .+= (kc / kdif)^3 .* exp.(-k2 .* tt0)
     cdf .+= 1.0
-    cdf = clamp.(cdf, 1e-12, 1.0 - 1e-12)
+    cdf = clamp.(cdf, 1e-10, 1.0 - 1e-10)
     return cdf
 end
 
@@ -278,7 +278,7 @@ function threehit_ccdf(t::Array, conc::Float64,
     ccdf .-= ((kc * k2 * (2.0*kc - k2))/kdif^2) .* tt0 .* exptt0
     ccdf .+= ((0.5 * kc*kc * k2) / kdif) .* (tt0 .* tt0) .* exptt0
     ccdf .-= (kc / kdif)^3 .* exp.(-k2 .* tt0)
-    ccdf = clamp.(ccdf, 1e-12, 1.0 - 1e-12)
+    ccdf = clamp.(ccdf, 1e-10, 1.0 - 1e-10)
     return ccdf
 end
 

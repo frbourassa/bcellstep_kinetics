@@ -379,7 +379,8 @@ function plotrobustness(fits123, rms123, allnames,
     # Remove points where threshold is too small and many trajectories start
     # already active, which is typically factor <= 0.4
     mask = (good_frac_range[1] .<= fracrange .<= good_frac_range[2])
-    skp = 1
+    npoints = length(fracrange)
+    skp = div(npoints, 15)
     rms1_sel = rms1_sel[mask, :][1:skp:end, :]
     rms2_sel = rms2_sel[mask, :][1:skp:end, :]
     rms3_sel = rms3_sel[mask, :][1:skp:end, :]
@@ -394,7 +395,7 @@ function plotrobustness(fits123, rms123, allnames,
     ## Plot of one-hit vs two-hit RMS error
     pp2 = pl.plot(layout=(1, 1), size=(450, 450), bottom_margin=2mm,
             legend=false, legendfontsize=9)
-    plotlimits = [1e-2, max(maximum(rms1_sel), maximum(rms2_sel))*1.5]
+    plotlimits = [1e-2, max(maximum(rms1_sel), maximum(rms2_sel), maximum(rms3_sel))*1.5]
     pl.plot!(pp2, plotlimits, plotlimits; color=:black, 
                 linestyle=:dot, label=nothing)
     for i in 1:length(selected)
@@ -461,7 +462,6 @@ function plotrobustness(fits123, rms123, allnames,
     best12_rms = min.(rms1_sel, rms2_sel)
     pp3 = pl.plot(layout=(1, 1), size=(450, 450), bottom_margin=2mm,
             legend=false, minorgrid=true, fgcolor_minorgrid=:white)
-    plotlimits = [1e-2, max(maximum(best12_rms), maximum(rms3_sel))*1.4]
     pl.plot!(pp3, plotlimits, plotlimits; color=:black, 
             linestyle=:dot, label=nothing)
     for i in 1:length(selected)

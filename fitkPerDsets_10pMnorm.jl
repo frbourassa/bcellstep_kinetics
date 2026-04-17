@@ -36,7 +36,8 @@ using LinearAlgebra: UniformScaling, diag, diagm, svd
 module tracksAnalysis
     include("analysis/tracks.jl")
 end
-using .tracksAnalysis: prepalldsets, prepcdf, concfromstr, cleannames
+using .tracksAnalysis: prepalldsets, prepcdf, concfromstr, cleannames, 
+    loadalldsets, threshalldsets
 
 module modelsML
     include("analysis/modelsML.jl")
@@ -791,7 +792,7 @@ function robustness_vs_thresh_main(;
     # Get a cleaned up list of data file names and paths
     fnames, fpaths = get_csv_file_names(datadir)
 
-    nfluopts = 10
+    nfluopts = 50
     
     # Save CDF fits for each file and each threshold fraction tried
     # number of parameters per dataset: one k2 plus (kappa, t0) for each dset
@@ -805,10 +806,13 @@ function robustness_vs_thresh_main(;
     
     fluothreshrange = collect(LinRange(0.1, 1.5, nfluopts))
 
+    # Load data once
+    tracks_alldsets, nicenames = loadalldsets(fpaths; disp=false)
+
     # Repeat analysis for a range of fluorescence thresholds
     for j in 1:1:nfluopts
-        tactiv_alldsets, durations, nicenames = prepalldsets(fpaths; 
-        fracabove=fluothreshrange[j], disp=false)
+        tactiv_alldsets, durations = threshalldsets(
+            tracks_alldsets, nicenames, fluothreshrange[j]; disp=false)
     
         # Fit the one-hit, two-hit, and three-hit models
         p1, rms1 = fitmodel(tactiv_alldsets, nicenames, durations, cdfthresh, 
@@ -825,6 +829,7 @@ function robustness_vs_thresh_main(;
                     threehit_loglhood_total, threehit_cdf)
         all_p3[j, :] = p3[1:end-1]
         all_rms3[j, :] = rms3
+        println(@sprintf "Finished fits for fluorescence threshold factor = %.2f" fluothreshrange[j])
     end
 
     # Plot slope and goodness of linear vs quadratic fits
