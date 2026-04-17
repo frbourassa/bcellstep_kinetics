@@ -81,11 +81,9 @@ end
 
 """
 One-hit model with cell activation
-Concentration is in pM, kappa is relative to that. 
+Concentration is in pM, kc is relative to that. 
 """
-function onehit_pdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
+function onehit_pdf(t::Array, kc::Float64, k2::Float64; t0::Float64=0.0)
     tt0 = clamp.(t .- t0, 0.0, Inf)
     factor = k2 * kc / (k2 - kc)
     fctpart = exp.(-kc .* tt0) .- exp.(-k2 .* tt0)
@@ -97,9 +95,7 @@ end
 """
 CDF of the 1-hit model
 """
-function onehit_cdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
+function onehit_cdf(t::Array, kc::Float64, k2::Float64; t0::Float64=0.0)
     tt0 = clamp.(t .- t0, 0.0, Inf)
     kdiff = (k2 - kc)
     fctpart = kc .* exp.(-k2 .* tt0) .- k2 .* exp.(-kc .* tt0)
@@ -111,9 +107,7 @@ end
 """
 Complementary CDF of the 1-hit model
 """
-function onehit_ccdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
+function onehit_ccdf(t::Array, kc::Float64, k2::Float64; t0::Float64=0.0)
     tt0 = clamp.(t .- t0, 0.0, Inf)
     kdiff = (k2 - kc)
     fctpart = k2 .* exp.(-kc .* tt0) .- kc .* exp.(-k2 .* tt0)
@@ -129,12 +123,12 @@ end
 """
 log-likelihood for 1 dataset for the 1-hit model
 """
-function onehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
-    kappa, k2, t0 = p
+function onehit_loglhood_1dset(p, times, ncell, klim0, klim1; te=nothing)
+    kc, k2, t0 = p
     if te === nothing
         te = times[min(klim1, length(times))]
     end
-    if (kappa < 0.0) || (k2 < 0.0) || (times[1] < t0) 
+    if (kc < 0.0) || (k2 < 0.0) || (times[1] < t0) 
         ll = -1e8
     else
         # Note that ncell includes those never activated, 
@@ -144,13 +138,13 @@ function onehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
         nc2 = ncell - nc0 - nc1
         lowerlim = max(1, klim0-1)
         if nc0 > 0
-            ll = nc0 * log(onehit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
+            ll = nc0 * log(onehit_cdf(times[lowerlim:lowerlim], kc, k2; t0=t0)[1])
         else
             ll = 0.0
         end
-        ll += sum(log.(onehit_pdf(times[klim0:klim1], conc, kappa, k2; t0=t0)))
+        ll += sum(log.(onehit_pdf(times[klim0:klim1], kc, k2; t0=t0)))
         if nc2 > 0
-            ll += nc2 * log(onehit_ccdf([te], conc, kappa, k2; t0=t0)[1])
+            ll += nc2 * log(onehit_ccdf([te], kc, k2; t0=t0)[1])
         end
     end
     return ll
@@ -168,10 +162,10 @@ function onehit_loglhood_total(p_all, times_all, concs, ncells,
     n_dsets = length(concs)
     ll_total = 0.0
     for n in 1:1:n_dsets
-        kappa = p_all[1 + n]
+        kc = p_all[1 + n]
         t0 = p_all[1 + n_dsets + n]
-        p = [kappa, p_all[1], t0]  # kappa, k2, t0 for dataset n
-        ll = onehit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
+        p = [kc, p_all[1], t0]  # kc, k2, t0 for dataset n
+        ll = onehit_loglhood_1dset(p, times_all[n], ncells[n], 
                         klim0s[n], klim1s[n]; te=te_all[n])
         ll_total += ll
     end
@@ -183,9 +177,7 @@ end
 """
 Two-hit model with cell activation step
 """
-function twohit_pdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
+function twohit_pdf(t::Array, kc::Float64, k2::Float64; t0::Float64=0.0)
     tt0 = clamp.(t .- t0, 0.0, Inf)
     kdiff = k2 - kc
     factor = k2 * kc*kc / kdiff
@@ -200,9 +192,7 @@ end
 CDF of the 2-hit model, coded in a way that prevents large
 cancellation errors when tt0 is approximately 0. TODO
 """
-function twohit_cdf_float(t::Float64, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
+function twohit_cdf_float(t::Float64, kc::Float64, k2::Float64; t0::Float64=0.0)
     kdiff = k2 - kc
     tt0 = clamp.(t .- t0, 0.0, Inf)
     if max(kc, k2) * tt0 < 1e-3
@@ -222,10 +212,9 @@ function twohit_cdf_float(t::Float64, conc::Float64,
     return cdf
 end
 
-function twohit_cdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
+function twohit_cdf(t::Array, kc::Float64, k2::Float64; t0::Float64=0.0)
     return collect(map(
-        x -> twohit_cdf_float(x, conc, kappa, k2; t0=t0), t))
+        x -> twohit_cdf_float(x, kc, k2; t0=t0), t))
 end
 
 
@@ -233,9 +222,7 @@ end
 Complementary CDF for the 2-hit model, 
 coded in a way that prevents 1-1 large cancellation errors. 
 """
-function twohit_ccdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
+function twohit_ccdf(t::Array, kc::Float64, k2::Float64; t0::Float64=0.0)
     kdiff = k2 - kc
     tt0 = clamp.(t .- t0, 0.0, Inf)
     prefact = k2 * kc / kdiff
@@ -253,12 +240,12 @@ end
 """
 log-likelihood for 1 dataset for the 1-hit model
 """
-function twohit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
-    kappa, k2, t0 = p
+function twohit_loglhood_1dset(p, times, ncell, klim0, klim1; te=nothing)
+    kc, k2, t0 = p
     if te === nothing
         te = times[min(klim1, length(times))]
     end
-    if (kappa < 0.0) || (k2 < 0.0) || (times[1] < t0)
+    if (kc < 0.0) || (k2 < 0.0) || (times[1] < t0)
         ll = -1e8
     else
         # Note that ncell includes those never activated, 
@@ -268,15 +255,15 @@ function twohit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
         nc2 = (ncell - nc0 - nc1)
         lowerlim = max(1, klim0-1)
         if nc0 > 0
-            ll = nc0 * log(twohit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
+            ll = nc0 * log(twohit_cdf(times[lowerlim:lowerlim], kc, k2; t0=t0)[1])
         else
             ll = 0.0
         end
         # Two-hit pdf also has large cancellation issues
         # This model is a numerical nightmare. 
-        ll += sum(log.(twohit_pdf(times[klim0:klim1], conc, kappa, k2; t0=t0)))
+        ll += sum(log.(twohit_pdf(times[klim0:klim1], kc, k2; t0=t0)))
         if nc2 > 0
-            ll += nc2 * log(twohit_ccdf([te], conc, kappa, k2; t0=t0)[1])
+            ll += nc2 * log(twohit_ccdf([te], kc, k2; t0=t0)[1])
         end
     end
     return ll
@@ -294,10 +281,10 @@ function twohit_loglhood_total(p_all, times_all, concs, ncells,
     n_dsets = length(concs)
     ll_total = 0.0
     for n in 1:1:n_dsets
-        kappa = p_all[1 + n]
+        kc = p_all[1 + n]
         t0 = p_all[1 + n_dsets + n]
-        p = [kappa, p_all[1], t0]  # kappa, k2, t0 for dataset n
-        ll = twohit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
+        p = [kc, p_all[1], t0]  # kc, k2, t0 for dataset n
+        ll = twohit_loglhood_1dset(p, times_all[n], ncells[n], 
                         klim0s[n], klim1s[n]; te=te_all[n])
         ll_total += ll
     end
@@ -308,9 +295,8 @@ end
 ### THREE-HIT MODEL ###
 
 """ CDF """
-function threehit_cdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
+function threehit_cdf(t::Array, 
+        kc::Float64, k2::Float64; t0::Float64=0.0)
     tt0 = clamp.(t .- t0, 0.0, Inf)
     exptt0 = exp.(-kc .* tt0)
     kdif = k2 - kc
@@ -325,9 +311,7 @@ end
 
 
 """ CCDF """
-function threehit_ccdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
+function threehit_ccdf(t::Array, kc::Float64, k2::Float64; t0::Float64=0.0)
     tt0 = clamp.(t .- t0, 0.0, Inf)
     exptt0 = exp.(-kc .* tt0)
     kdif = k2 - kc
@@ -341,9 +325,7 @@ end
 
 
 """ PDF """ 
-function threehit_pdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
+function threehit_pdf(t::Array, kc::Float64, k2::Float64; t0::Float64=0.0)
     tt0 = clamp.(t .- t0, 0.0, Inf)
     exptt0 = exp.(-kc .* tt0)
     kdif = k2 - kc
@@ -360,12 +342,12 @@ end
 """
 log-likelihood for 1 dataset for the 3-hit model
 """
-function threehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
-    kappa, k2, t0 = p
+function threehit_loglhood_1dset(p, times, ncell, klim0, klim1; te=nothing)
+    kc, k2, t0 = p
     if te === nothing
         te = times[min(klim1, length(times))]
     end
-    if (kappa < 0.0) || (k2 < 0.0) || (times[1] < t0)
+    if (kc < 0.0) || (k2 < 0.0) || (times[1] < t0)
         ll = -1e8
     else
         # Note that ncell includes those never activated, 
@@ -375,14 +357,14 @@ function threehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing
         nc2 = (ncell - nc0 - nc1)
         lowerlim = max(1, klim0-1)
         if nc0 > 0
-            ll = nc0 * log(threehit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
+            ll = nc0 * log(threehit_cdf(times[lowerlim:lowerlim], kc, k2; t0=t0)[1])
         else
             ll = 0.0
         end
-        pdfvals = threehit_pdf(times[klim0:klim1], conc, kappa, k2; t0=t0)
+        pdfvals = threehit_pdf(times[klim0:klim1], kc, k2; t0=t0)
         ll += sum(log.(pdfvals))
         if nc2 > 0
-            ll += nc2 * log(threehit_ccdf([te], conc, kappa, k2; t0=t0)[1])
+            ll += nc2 * log(threehit_ccdf([te], kc, k2; t0=t0)[1])
         end
     end
     return ll
@@ -400,10 +382,10 @@ function threehit_loglhood_total(p_all, times_all, concs, ncells,
     n_dsets = length(concs)
     ll_total = 0.0
     for n in 1:1:n_dsets
-        kappa = p_all[1 + n]
+        kc = p_all[1 + n]
         t0 = p_all[1 + n_dsets + n]
-        p = [kappa, p_all[1], t0]  # kappa, k2, t0 for dataset n
-        ll = threehit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
+        p = [kc, p_all[1], t0]  # kc, k2, t0 for dataset n
+        ll = threehit_loglhood_1dset(p, times_all[n], ncells[n], 
                         klim0s[n], klim1s[n]; te=te_all[n])
         ll_total += ll
     end

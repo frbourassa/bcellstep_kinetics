@@ -22,8 +22,9 @@ using .tracksAnalysis: concfromstr, cleannames
 module models
     include("modelsML.jl")
 end
-using .models: onehit_cdf, twohit_cdf, threehit_cdf, expocdf
+using .models: expocdf
 
+pl.default(fontfamily="Arial")
 
 ### CLEANUP FUNCTIONS ###
 

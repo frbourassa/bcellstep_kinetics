@@ -44,6 +44,8 @@ using .modelsML: expocdf, expopdf, expoccdf, logexpoccdf, logexpopdf,
     expo_loglhood_1dset
 
 
+pl.default(fontfamily="Arial")
+
 
 ### RMS ERROR COMPUTATION ###
 
@@ -367,7 +369,7 @@ function fit_ml_all_datasets(;
     end
     =#
     # Manual selection, to show we can get different appearances
-    selected_indices = Int[7, 4, 3, 2]
+    selected_indices = Int[7, 4, 3, 1]
     sind = join((string(a) for a in selected_indices), "")
     selected_tactiv = tactiv_alldsets[selected_indices]
     selected_durations = durations[selected_indices]

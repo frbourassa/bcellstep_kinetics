@@ -2,18 +2,17 @@
 Fit CDF activation models using Maximum Likelihood Estimation
 across multiple datasets in the JR064 experiment. The cell-intrinsic
 rate is fitted across datasets, but the hit rate is fitted
-on each dataset, to account for replicate variability and non-trivial
-scaling with concentration. 
+on each dataset, to account for replicate variability. 
 
-Variant where we normalize CDFs based on the fraction of cells
-that never activate in the 10 pM experiments. We assume that such a high
-concentration, all cells that could have been activated will have been
-by the end of the movie; tracks that do not must be from a distinct population
-not expected to follow the model fitted. There always seems
-to be a 15-20 % of tracks that are in that situation. 
+We normalize CDFs based on the fraction of cells that never activate 
+in the 10 pM experiments. We assume that such a high concentration, 
+all cells that could have been activated will have been by the end of a movie;
+tracks that do not must be from a distinct population of dead/anergic cells
+and spurios tracks, not expected to follow the activation models. 
+There always seems to be a 15-20 % of tracks that are in that situation. 
 
 This script:
-1. Loads all datasets in JR064_tracks
+1. Loads all valid datasets in JR064_tracks
 2. Preprocesses activation times
 3. Defines one-hit and two-hit models
 3. Fits one-hit and two-hit models across all datasets simultaneously
@@ -26,10 +25,11 @@ François X. P. Bourassa, 2026
 using DataFrames: DataFrames as DF
 using Plots: Plots as pl
 using Printf: @sprintf
-using Statistics: mean
 using Measures: mm
 using Optim: Optim, optimize, IPNewton
 using LinearAlgebra: UniformScaling, diag, diagm, svd
+
+pl.default(fontfamily="Arial")
 
 
 # Load the data processing module
@@ -61,9 +61,9 @@ Compute the root-mean-squared error of the fitted cumulative distribution
 function across all datasets.
 
 Arguments:
-- p_all: fitted parameters array [kappa, k2, t0_1, t0_2, ..., t0_n]
-  where kappa and k2 are shared across all datasets,
-  and t0_n is the activation time offset for dataset n.
+- p_all: fitted parameters array [k2, kc_1, kc_2, ..., kc_n, t0_1, t0_2, ..., t0_n]
+  where k2 is shared across all datasets, while kc_n and t0_n
+  are the hit rate and the activation time offset for dataset n.
 - tu_all: list of unique time arrays for each dataset
 - cumuls_all: list of empirical cumulative distributions for each dataset
 - ilim0s_all: list of lower indices (first point with t > 0) for each dataset
@@ -85,7 +85,7 @@ function compute_rms_all_dsets(p_all, tu_all, cumuls_all, ilim0s_all,
     k2 = p_all[1]
     
     for n in 1:n_dsets
-        kappa = p_all[1 + n]
+        kc = p_all[1 + n]
         tu = tu_all[n]
         cumul = cumuls_all[n]
         ilim0 = ilim0s_all[n]
@@ -98,7 +98,7 @@ function compute_rms_all_dsets(p_all, tu_all, cumuls_all, ilim0s_all,
         rms_i = (ilim1 > ilim0) ? ilim0 : 1
         
         # Compute the fitted CDF for this dataset
-        cdfestim = cdffct(tu[rms_i:ilim1], conc, kappa, k2; t0=t0)
+        cdfestim = cdffct(tu[rms_i:ilim1], kc, k2; t0=t0)
         
         # Accumulate squared residuals
         dataset_sres = sum((cumul[rms_i:ilim1] .- cdfestim).^2)
@@ -119,8 +119,8 @@ end
 
 
 function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdffct)
-    # kappa estimate: diffusion-limited, 0.4 pM^-1 s^-1, 
-    # times default concentration scale of 1 pM. 
+    # kc estimate: diffusion-limited, 0.4 pM^-1 s^-1, 
+    # times concentration with default unit scale of 1 pM. 
     # k2 estimate: fast to begin with
     lower = [1e-4]  # k2
     upper = [20.0]
@@ -131,12 +131,13 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
     res = prepare_all_cdfs(tactiv_alldsets, dsetnames, durations, cdfthresh)
     concs_all, ncell_all, k0_all, k1_all, te_all, tu_all, cumuls_all = res
 
-    # Limits for parameter kappa of each dataset
+    # Limits for parameter kc of each dataset
     n_dsets = length(tactiv_alldsets)
     for i in 1:1:n_dsets
-        push!(lower, 1e-4 / conc_scale)  # kappa lower bound, scaled by conc scale
-        push!(upper, 20.0 / conc_scale)  # kappa upper bound, scaled by conc scale
-        push!(init_p, 0.4 / conc_scale)  # kappa initial guess, scaled by conc scale
+        concs_all
+        push!(lower, 1e-4 * concs_all[i])  # kc lower bound, times conc
+        push!(upper, 20.0 * concs_all[i])  # kc upper bound, times conc
+        push!(init_p, 0.4 * concs_all[i])  # kc initial guess, diffusion-limit
     end
     
 
@@ -163,7 +164,7 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
     # Get the results
     fit_params = Optim.minimizer(results)
     k2 = fit_params[1]
-    kappas = fit_params[2:1+n_dsets]
+    kcs = fit_params[2:1+n_dsets]
     t0s = fit_params[2+n_dsets:end]
     flag = Optim.converged(results)
     if !flag
@@ -176,19 +177,6 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
         fit_params, tu_all, cumuls_all, 
         k0_all, k1_all, concs_all, cdffct)
     
-    # Use minus log-likelihood instead, should be minimized
-    #rmserr = cost([slope, t0])
-
-    #=
-    # Compute model evidence p(D) = \int p(D|\theta)p(\theta) d\theta
-    # by numerical integration of the likelihood over the flat prior
-    # in the parameter boundaries we chose for \theta = (k, t0).
-    lhood = theta -> exp(loglhood_linear(theta, tu, ilim1, ncells, ilim0))
-    # The return value of hcubature is a tuple (I, E) 
-    # of the estimated integral I and an estimated error E
-    evid, evid_err = hcubature(lhood, lower, upper)
-    rmserr = 1.0/evid  # inverse evidence should be minimized
-    =#
     result = Array{Float64}(vcat(fit_params, [rmserr]))
 
     return result, rms_per_dset
@@ -203,9 +191,9 @@ Arguments:
 - nicenames: list of dataset names
 - durations: list of experiment durations
 - cdfthresh: CDF threshold used for fitting
-- onehit_params: [kappa, k2, t0_1, t0_2, ...]
-- twohit_params: [kappa, k2, t0_1, t0_2, ...]
-- threehit_params: [kappa, k2, t0_1, t0_2, ...]
+- onehit_params: [k2, kc_1, kc_2, ..., kc_n, t0_1, t0_2, ..., t0_n]
+- twohit_params: [k2, kc_1, kc_2, ..., kc_n, t0_1, t0_2, ..., t0_n]
+- threehit_params: [k2, kc_1, kc_2, ..., kc_n, t0_1, t0_2, ..., t0_n]
 - onehit_cdf, twohit_cdf, threehit_cdf: CDF functions
 - onehit_rms, twohit_rms, threehit_rms: RMS errors for model comparison
 """
@@ -242,20 +230,20 @@ function plot_ml_cdf_comparison(cdf_prep_results, nicenames,
         ncumul = vcat([0], cumul .* ncells)
         
         # Get parameters for this dataset
-        k2_1, kappa_1, t0_1 = onehit_params[1], onehit_params[1+i], onehit_params[1+n_dsets+i]
-        k2_2, kappa_2, t0_2 = twohit_params[1], twohit_params[1+i], twohit_params[1+n_dsets+i]
-        k2_3, kappa_3, t0_3 = threehit_params[1], threehit_params[1+i], threehit_params[1+n_dsets+i]
+        k2_1, kc_1, t0_1 = onehit_params[1], onehit_params[1+i], onehit_params[1+n_dsets+i]
+        k2_2, kc_2, t0_2 = twohit_params[1], twohit_params[1+i], twohit_params[1+n_dsets+i]
+        k2_3, kc_3, t0_3 = threehit_params[1], threehit_params[1+i], threehit_params[1+n_dsets+i]
         
         # Generate smooth curves
         trange = collect(LinRange(0, tu[end], 100))
         
-        cdf1 = onehit_cdf(trange, conc, kappa_1, k2_1; t0=t0_1)
+        cdf1 = onehit_cdf(trange, kc_1, k2_1; t0=t0_1)
         y1 = cdf1 .* ncells
         
-        cdf2 = twohit_cdf(trange, conc, kappa_2, k2_2; t0=t0_2)
+        cdf2 = twohit_cdf(trange, kc_2, k2_2; t0=t0_2)
         y2 = cdf2 .* ncells
         
-        cdf3 = threehit_cdf(trange, conc, kappa_3, k2_3; t0=t0_3)
+        cdf3 = threehit_cdf(trange, kc_3, k2_3; t0=t0_3)
         y3 = cdf3 .* ncells
         
         # Plot on subplot i
@@ -325,14 +313,14 @@ function fit_ml_all_datasets(;
     
     # Step 2: Fit the one-hit model
     println("\n" * "-"^70)
-    println("Fitting ONE-HIT model (kappa, k2, one t0 per dataset)...")
+    println("Fitting ONE-HIT model (overall k2, one kc and one t0 per dataset)...")
     println("-"^70)
     onehit_result, onehit_all_rms = fitmodel(tactiv_alldsets, 
                     nicenames, durations, cdfthresh, 
                     onehit_loglhood_total, onehit_cdf)
     onehit_params = onehit_result[1:end-1]
     onehit_k2 = onehit_params[1]
-    onehit_kappas = onehit_result[2:1+n_dsets]
+    onehit_kcs = onehit_result[2:1+n_dsets]
     onehit_t0s = onehit_result[2+n_dsets:end-1]
     onehit_rms = onehit_result[end]
     
@@ -340,20 +328,20 @@ function fit_ml_all_datasets(;
     println(@sprintf "  k2        = %.4f s^-1" onehit_k2)
     println("  t0 per dataset:")
     for (i, t0) in enumerate(onehit_t0s)
-        println(@sprintf "    Dataset %d (%s):  κc_0 (kappa * 1 pM) = %.4f s^-1" i nicenames[i] onehit_kappas[i])
+        println(@sprintf "    Dataset %d (%s):  kc = %.4f s^-1" i nicenames[i] onehit_kcs[i])
         println(@sprintf "    Dataset %d (%s): t0 = %.4f s" i nicenames[i] t0)
     end
     
     # Step 3: Fit the two-hit model
     println("\n" * "-"^70)
-    println("Fitting TWO-HIT model (kappa, k2, one t0 per dataset)...")
+    println("Fitting TWO-HIT model (overall k2, one kc and one t0 per dataset)...")
     println("-"^70)
     twohit_result, twohit_all_rms = fitmodel(tactiv_alldsets, 
                         nicenames, durations, cdfthresh,
                         twohit_loglhood_total, twohit_cdf)
     twohit_params = twohit_result[1:end-1]
     twohit_k2 = twohit_params[1]
-    twohit_kappas = twohit_result[2:1+n_dsets]
+    twohit_kcs = twohit_result[2:1+n_dsets]
     twohit_t0s = twohit_result[2+n_dsets:end-1]
     twohit_rms = twohit_result[end]
     
@@ -361,20 +349,20 @@ function fit_ml_all_datasets(;
     println(@sprintf "  k2        = %.4f s^-1" twohit_k2)
     println("  t0 per dataset:")
     for (i, t0) in enumerate(twohit_t0s)
-        println(@sprintf "    Dataset %d (%s):  κc_0 (kappa * 1 pM) = %.4f s^-1" i nicenames[i] twohit_kappas[i])
+        println(@sprintf "    Dataset %d (%s):  kc = %.4f s^-1" i nicenames[i] twohit_kcs[i])
         println(@sprintf "    Dataset %d (%s): t0 = %.4f s" i nicenames[i] t0)
     end
     
     # Step 4: Fit the three-hit model
     println("\n" * "-"^70)
-    println("Fitting THREE-HIT model (kappa, k2, one t0 per dataset)...")
+    println("Fitting THREE-HIT model (overall k2, one kc and one t0 per dataset)...")
     println("-"^70)
     threehit_result, threehit_all_rms = fitmodel(tactiv_alldsets, 
                             nicenames, durations, cdfthresh,
                             threehit_loglhood_total, threehit_cdf)
     threehit_params = threehit_result[1:end-1]
     threehit_k2 = threehit_params[1]
-    threehit_kappas = threehit_result[2:1+n_dsets]
+    threehit_kcs = threehit_result[2:1+n_dsets]
     threehit_t0s = threehit_result[2+n_dsets:end-1]
     threehit_rms = threehit_result[end]
     
@@ -382,7 +370,7 @@ function fit_ml_all_datasets(;
     println(@sprintf "  k2        = %.4f s^-1" threehit_k2)
     println("  t0 per dataset:")
     for (i, t0) in enumerate(threehit_t0s)
-        println(@sprintf "    Dataset %d (%s):  κc_0 (kappa * 1 pM) = %.4f s^-1" i nicenames[i] threehit_kappas[i])
+        println(@sprintf "    Dataset %d (%s):  kc = %.4f s^-1" i nicenames[i] threehit_kcs[i])
         println(@sprintf "    Dataset %d (%s): t0 = %.4f s" i nicenames[i] t0)
     end
 
@@ -460,7 +448,7 @@ function robustness_vs_thresh_main(;
     nfluopts = 50
     
     # Save CDF fits for each file and each threshold fraction tried
-    # number of parameters per dataset: one k2 plus (kappa, t0) for each dset
+    # number of parameters per dataset: one k2 plus (kc, t0) for each dset
     n_dsets = length(fnames)
     all_p1 = zeros(Float64, nfluopts, 1 + 2*n_dsets)
     all_rms1 = zeros(Float64, nfluopts, n_dsets)
@@ -508,7 +496,7 @@ function robustness_vs_thresh_main(;
     # Display and save the resulting plots
     ppp, pp2, pp3 = allplots
 
-    param_names = ["kappa", "t0"]
+    param_names = ["kc", "t0"]
     for i in 1:1:2
         nm = param_names[i]
         fname = joinpath(plotdir, "paramfits_$(nm)_vs_threshold.pdf")
