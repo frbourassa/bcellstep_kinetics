@@ -38,345 +38,19 @@ module tracksAnalysis
 end
 using .tracksAnalysis: prepalldsets, prepcdf, concfromstr, cleannames
 
+module modelsML
+    include("analysis/modelsML.jl")
+end
+using .modelsML: onehit_cdf, onehit_ccdf, onehit_pdf, onehit_loglhood_total,
+    twohit_cdf, twohit_ccdf, twohit_pdf, twohit_loglhood_total,
+    threehit_cdf, threehit_ccdf, threehit_pdf, threehit_loglhood_total
+
+module tracksPlots
+    include("analysis/tracksPlots.jl")
+end
+using .tracksPlots: plotrobustness
+
 conc_scale = 1.0  # pM
-
-### MODELS PDFs AND CDFs ###
-
-"""
-For observed k fit, showing there may be a cell activation-limited step
-"""
-function expocdf(t::Array, rate::Float64; t0::Float64=0.0)
-    rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
-    cdf = 1.0 .- exp.(-rtt0)
-    return cdf
-end
-
-
-"""
-One-hit model with cell activation
-Concentration is in pM, kappa is relative to that. 
-"""
-function onehit_pdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
-    tt0 = clamp.(t .- t0, 0.0, Inf)
-    factor = k2 * kc / (k2 - kc)
-    fctpart = exp.(-kc .* tt0) .- exp.(-k2 .* tt0)
-    pdf = factor .* fctpart
-    return pdf
-end
-
-
-"""
-CDF of the 1-hit model
-"""
-function onehit_cdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
-    tt0 = clamp.(t .- t0, 0.0, Inf)
-    kdiff = (k2 - kc)
-    fctpart = kc .* exp.(-k2 .* tt0) .- k2 .* exp.(-kc .* tt0)
-    cdf = 1.0 .+ fctpart ./ kdiff
-    return cdf
-end
-
-
-"""
-Complementary CDF of the 1-hit model
-"""
-function onehit_ccdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
-    tt0 = clamp.(t .- t0, 0.0, Inf)
-    kdiff = (k2 - kc)
-    fctpart = k2 .* exp.(-kc .* tt0) .- kc .* exp.(-k2 .* tt0)
-    #fctpart = exp.(-kc .* tt0) .* (k2 .- kc .* exp.(-kdiff .* tt0))
-    ccdf = fctpart ./ kdiff
-    return ccdf
-end
-
-
-"""
-Two-hit model with cell activation step
-"""
-function twohit_pdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
-    tt0 = clamp.(t .- t0, 0.0, Inf)
-    kdiff = k2 - kc
-    factor = k2 * kc*kc / kdiff
-    fctpart1 = tt0 .* exp.(-kc .* tt0)
-    fctpart2 = (exp.(-kc .* tt0) .- exp.(-k2 .* tt0)) ./ kdiff
-    pdf = factor .* (fctpart1 .- fctpart2)
-    return pdf
-end
-
-
-"""
-CDF of the 2-hit model, coded in a way that prevents large
-cancellation errors when tt0 is approximately 0. TODO
-"""
-function twohit_cdf_float(t::Float64, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
-    kdiff = k2 - kc
-    tt0 = clamp.(t .- t0, 0.0, Inf)
-    if max(kc, k2) * tt0 < 1e-3
-        # Taylor approximation to prevent large cancellation errors
-        # Leading term is in t^3, so error is (1e-2)^4 < 1e-8, good
-        cdf = k2 * kc * kc / 6.0 * tt0^3
-    else
-        prefact = k2 * kc / kdiff
-        fact1 = (k2 - 2.0 * kc) / kdiff / kc
-        fact2 = kc / kdiff / k2
-        tt0ekct0 = tt0 * exp(-kc * tt0)
-        term1 = fact1 * (1.0 - exp(-kc * tt0))
-        term2 = fact2 * (1.0 - exp(-k2 * tt0))
-        cdf = prefact * (term1 - tt0ekct0 + term2)
-    end
-    cdf = clamp(cdf, 1e-12, 1.0 - 1e-12)
-    return cdf
-end
-
-function twohit_cdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    return collect(map(
-        x -> twohit_cdf_float(x, conc, kappa, k2; t0=t0), t))
-end
-
-
-"""
-Complementary CDF for the 2-hit model, 
-coded in a way that prevents 1-1 large cancellation errors. 
-"""
-function twohit_ccdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
-    kdiff = k2 - kc
-    tt0 = clamp.(t .- t0, 0.0, Inf)
-    prefact = k2 * kc / kdiff
-    fact23 = kc / kdiff
-    ekct0 = exp.(-kc .* tt0)
-    term1 = ekct0 .* (1.0 .+ kc .* tt0) ./ kc
-    term2 = exp.(-k2 .* tt0) ./ k2  .- ekct0 ./ kc  
-    ccdf = prefact .* (term1 .+ fact23 .* term2)
-    return ccdf
-end
-
-
-### LOG-LIKELIHOOD FUNCTIONS AND DERIVATIVES ###
-
-"""
-log-likelihood for 1 dataset for the 1-hit model
-"""
-function onehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
-    kappa, k2, t0 = p
-    if te === nothing
-        te = times[min(klim1, length(times))]
-    end
-    if (kappa < 0.0) || (k2 < 0.0) || (times[1] < t0) 
-        ll = -1e8
-    else
-        # Note that ncell includes those never activated, 
-        # whereas times only includes cells eventually activated
-        nc0 = klim0 - 1  # number of cells with t_activ = 0
-        nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
-        nc2 = ncell - nc0 - nc1
-        lowerlim = max(1, klim0-1)
-        if nc0 > 0
-            ll = nc0 * log(onehit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
-        else
-            ll = 0.0
-        end
-        ll += sum(log.(onehit_pdf(times[klim0:klim1], conc, kappa, k2; t0=t0)))
-        if nc2 > 0
-            ll += nc2 * log(onehit_ccdf([te], conc, kappa, k2; t0=t0)[1])
-        end
-    end
-    return ll
-end
-
-
-"""
-Log-likelihood across datasets for the 1-hit model
-"""
-function onehit_loglhood_total(p_all, times_all, concs, ncells, 
-            klim0s, klim1s; te_all=nothing)
-    # From the lists of times, klim0s, klim1s, ncells
-    # compute likelihood contribution from each dataset, 
-    # with one t0 per dataset, and combine at the end. 
-    n_dsets = length(concs)
-    ll_total = 0.0
-    for n in 1:1:n_dsets
-        kappa = p_all[1 + n]
-        t0 = p_all[1 + n_dsets + n]
-        p = [kappa, p_all[1], t0]  # kappa, k2, t0 for dataset n
-        ll = onehit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
-                        klim0s[n], klim1s[n]; te=te_all[n])
-        ll_total += ll
-    end
-    return ll_total
-end
-
-
-"""
-log-likelihood for 1 dataset for the 1-hit model
-"""
-function twohit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
-    kappa, k2, t0 = p
-    if te === nothing
-        te = times[min(klim1, length(times))]
-    end
-    if (kappa < 0.0) || (k2 < 0.0) || (times[1] < t0)
-        ll = -1e8
-    else
-        # Note that ncell includes those never activated, 
-        # whereas times only includes cells eventually activated
-        nc0 = klim0 - 1  # number of cells with t_activ = 0
-        nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
-        nc2 = (ncell - nc0 - nc1)
-        lowerlim = max(1, klim0-1)
-        if nc0 > 0
-            ll = nc0 * log(twohit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
-        else
-            ll = 0.0
-        end
-        # Two-hit pdf also has large cancellation issues
-        # This model is a numerical nightmare. 
-        ll += sum(log.(twohit_pdf(times[klim0:klim1], conc, kappa, k2; t0=t0)))
-        if nc2 > 0
-            ll += nc2 * log(twohit_ccdf([te], conc, kappa, k2; t0=t0)[1])
-        end
-    end
-    return ll
-end
-
-
-"""
-Log-likelihood across datasets for the 2-hit model
-"""
-function twohit_loglhood_total(p_all, times_all, concs, ncells, 
-            klim0s, klim1s; te_all=nothing)
-    # From the lists of times, klim0s, klim1s, ncells
-    # compute likelihood contribution from each dataset, 
-    # with one t0 per dataset, and combine at the end. 
-    n_dsets = length(concs)
-    ll_total = 0.0
-    for n in 1:1:n_dsets
-        kappa = p_all[1 + n]
-        t0 = p_all[1 + n_dsets + n]
-        p = [kappa, p_all[1], t0]  # kappa, k2, t0 for dataset n
-        ll = twohit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
-                        klim0s[n], klim1s[n]; te=te_all[n])
-        ll_total += ll
-    end
-    return ll_total
-end
-
-
-# Three-hit model, for complete comparison
-
-""" CDF """
-function threehit_cdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
-    tt0 = clamp.(t .- t0, 0.0, Inf)
-    exptt0 = exp.(-kc .* tt0)
-    kdif = k2 - kc
-    cdf = -(k2 * (3.0*kc*kc - 3.0*kc*k2 + k2*k2) / kdif^3) .* exptt0
-    cdf .+= ((kc * k2 * (2.0*kc - k2))/kdif^2) .* tt0 .* exptt0
-    cdf .-= ((0.5 * kc*kc * k2) / kdif) .* (tt0 .* tt0) .* exptt0
-    cdf .+= (kc / kdif)^3 .* exp.(-k2 .* tt0)
-    cdf .+= 1.0
-    cdf = clamp.(cdf, 1e-12, 1.0 - 1e-12)
-    return cdf
-end
-
-
-""" CCDF """
-function threehit_ccdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
-    tt0 = clamp.(t .- t0, 0.0, Inf)
-    exptt0 = exp.(-kc .* tt0)
-    kdif = k2 - kc
-    ccdf = (k2 * (3.0*kc*kc - 3.0*kc*k2 + k2*k2) / kdif^3) .* exptt0
-    ccdf .-= ((kc * k2 * (2.0*kc - k2))/kdif^2) .* tt0 .* exptt0
-    ccdf .+= ((0.5 * kc*kc * k2) / kdif) .* (tt0 .* tt0) .* exptt0
-    ccdf .-= (kc / kdif)^3 .* exp.(-k2 .* tt0)
-    ccdf = clamp.(ccdf, 1e-12, 1.0 - 1e-12)
-    return ccdf
-end
-
-
-""" PDF """ 
-function threehit_pdf(t::Array, conc::Float64, 
-        kappa::Float64, k2::Float64; t0::Float64=0.0)
-    kc = kappa * conc
-    tt0 = clamp.(t .- t0, 0.0, Inf)
-    exptt0 = exp.(-kc .* tt0)
-    kdif = k2 - kc
-    pdf = (0.5 / kdif) .* tt0.*tt0 .* exptt0
-    pdf .-= (tt0 .* exptt0) ./ kdif^2 
-    pdf .+= (exptt0 .- exp.(-k2 .* tt0)) ./ kdif^3 
-    pdf .*= (kc^3 * k2)
-    return pdf
-end
-
-
-"""
-log-likelihood for 1 dataset for the 3-hit model
-"""
-function threehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
-    kappa, k2, t0 = p
-    if te === nothing
-        te = times[min(klim1, length(times))]
-    end
-    if (kappa < 0.0) || (k2 < 0.0) || (times[1] < t0)
-        ll = -1e8
-    else
-        # Note that ncell includes those never activated, 
-        # whereas times only includes cells eventually activated
-        nc0 = klim0 - 1  # number of cells with t_activ = 0
-        nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
-        nc2 = (ncell - nc0 - nc1)
-        lowerlim = max(1, klim0-1)
-        if nc0 > 0
-            ll = nc0 * log(threehit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
-        else
-            ll = 0.0
-        end
-        # Three-hit model can be numerically unstable; clamp small probabilities.
-        pdfvals = threehit_pdf(times[klim0:klim1], conc, kappa, k2; t0=t0)
-        ll += sum(log.(pdfvals))
-        if nc2 > 0
-            ll += nc2 * log(threehit_ccdf([te], conc, kappa, k2; t0=t0)[1])
-        end
-    end
-    return ll
-end
-
-
-"""
-Log-likelihood across datasets for the 3-hit model
-"""
-function threehit_loglhood_total(p_all, times_all, concs, ncells, 
-            klim0s, klim1s; te_all=nothing)
-    # From the lists of times, klim0s, klim1s, ncells
-    # compute likelihood contribution from each dataset, 
-    # with one t0 per dataset, and combine at the end. 
-    n_dsets = length(concs)
-    ll_total = 0.0
-    for n in 1:1:n_dsets
-        kappa = p_all[1 + n]
-        t0 = p_all[1 + n_dsets + n]
-        p = [kappa, p_all[1], t0]  # kappa, k2, t0 for dataset n
-        ll = threehit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
-                        klim0s[n], klim1s[n]; te=te_all[n])
-        ll_total += ll
-    end
-    return ll_total
-end
 
 
 ### RMS ERROR COMPUTATION ###
@@ -886,21 +560,8 @@ function plot_models_vs_concentration(nicenames, ncell_all, onehit_params, twohi
 end
 
 
-
-### MAIN ANALYSIS FUNCTION ###
-
-function fit_ml_all_datasets(; 
-    datadir="data/JR064_tracks",
-    plotdir="figures/ml_fits_kperdset_10pMnorm/",
-    fracabove=0.6,
-    cdfthresh=0.75)
-    
-    # Create output directory if it doesn't exist
-    if !isdir(plotdir)
-        mkpath(plotdir)
-    end
-    
-    # Get all CSV files from the data directory
+function get_csv_file_names(datadir)
+        # Get all CSV files from the data directory
     fnames = vec(collect(f for f in readdir(datadir) if endswith(f, ".csv")))
     
     if isempty(fnames)
@@ -933,6 +594,27 @@ function fit_ml_all_datasets(;
     shortnames = shortnames[sortidx]
     fnames = fnames[sortidx]
     fpaths = fpaths[sortidx]
+
+    return fnames, fpaths
+end
+
+
+
+### MAIN ANALYSIS FUNCTION ###
+
+function fit_ml_all_datasets(; 
+    datadir="data/JR064_tracks",
+    plotdir="figures/ml_fits_kperdset_10pMnorm/",
+    fracabove=0.8,
+    cdfthresh=0.75)
+    
+    # Create output directory if it doesn't exist
+    if !isdir(plotdir)
+        mkpath(plotdir)
+    end
+    
+    # Get a cleaned up list of data file names and paths
+    fnames, fpaths = get_csv_file_names(datadir)
     
     println("\n" * "="^70)
     println("MAXIMUM LIKELIHOOD FITTING - JR064 DATASETS")
@@ -1094,80 +776,83 @@ end
 # Robustness analysis
 # as we vary the fluorescence threshold
 # Main analysis + plotting function for varying the fluorescence threshold
-function robustness_vs_thresh_main(;
+function robustness_vs_thresh_main(; 
     datadir="data/JR064_tracks",
     plotdir="figures/ml_fits_kperdset_10pMnorm/",
     fracabove_default=0.8,
-    cdfthresh=0.75)
-    # There have been duplications in the tracks files, some tracks are the same data:
-    # 1 pM and 10pM_z1 are the same
-    # 1pM_2 and 10pM_2 are the same, and 10pM_2_z1 is nearly the same
-    # Remove the apparently duplicate/mislabeled 10pM ones from the summary plot. 
-    duplicatetracks = ["10pM_2.csv", "10pM_z1.csv", "10pM_2_z1.csv"]
-    rejects = collect(any(contains(x, a) for a in duplicatetracks) for x in filelist)
-    filelistclean = collect(filelist[i] for i in 1:1:length(rejects) if !rejects[i])
+    cdfthresh=0.75, 
+    dosave=true)
+    
+    # Create output directory if it doesn't exist
+    if !isdir(plotdir)
+        mkpath(plotdir)
+    end
+    
+    # Get a cleaned up list of data file names and paths
+    fnames, fpaths = get_csv_file_names(datadir)
 
-    nfluopts = 50
+    nfluopts = 10
     
     # Save CDF fits for each file and each threshold fraction tried
-    all_cdflin = zeros(Float64, length(filelistclean), nfluopts, 6)
-    all_cdfquad = zeros(Float64, length(filelistclean), nfluopts, 6)
-    all_cdf3 = zeros(Float64, length(filelistclean), nfluopts, 6)
+    # number of parameters per dataset: one k2 plus (kappa, t0) for each dset
+    n_dsets = length(fnames)
+    all_p1 = zeros(Float64, nfluopts, 1 + 2*n_dsets)
+    all_rms1 = zeros(Float64, nfluopts, n_dsets)
+    all_p2 = zeros(Float64, nfluopts, 1 + 2*n_dsets)
+    all_rms2 = zeros(Float64, nfluopts, n_dsets)
+    all_p3 = zeros(Float64, nfluopts, 1 + 2*n_dsets)
+    all_rms3 = zeros(Float64, nfluopts, n_dsets)
+    
     fluothreshrange = collect(LinRange(0.1, 1.5, nfluopts))
 
-    for (i, fi) in enumerate(filelistclean)
-        println(fi)
-        path = joinpath(datadir, fi)
-        greentrajs = preptrajdata(path; ch="MEAN_INTENSITY_CH2", filterpms=filterpms)  # Calcium fluorescence
-        
-        # Plot these raw trajectories
-        fi2 = replace(fi, "0." => "0-")
-        fi2 = replace(fi2, ".csv" => "")
+    # Repeat analysis for a range of fluorescence thresholds
+    for j in 1:1:nfluopts
+        tactiv_alldsets, durations, nicenames = prepalldsets(fpaths; 
+        fracabove=fluothreshrange[j], disp=false)
+    
+        # Fit the one-hit, two-hit, and three-hit models
+        p1, rms1 = fitmodel(tactiv_alldsets, nicenames, durations, cdfthresh, 
+                    onehit_loglhood_total, onehit_cdf)
+        all_p1[j, :] = p1[1:end-1]  # last entry is RMS
+        all_rms1[j, :] = rms1
 
-        # Repeat analysis for a range of fluorescence thresholds
-        for j in 1:1:nfluopts
-            activtimes, activfluos, thresh = findactivtimes_thresh(
-                greentrajs; fracabove=fluothreshrange[j], disp=false)
-        
-            # Fit an exponential on the CDF
-            cdfparams = fitcdfslope(activtimes, cdfthresh)
-            all_cdflin[i, j, 1:6] = cdfparams[1:6]
+        p2, rms2 = fitmodel(tactiv_alldsets, nicenames, durations, cdfthresh, 
+                    twohit_loglhood_total, twohit_cdf)
+        all_p2[j, :] = p2[1:end-1]
+        all_rms2[j, :] = rms2
 
-            # Compare to quadratic fit with RMS metric for goodness of fit
-            cdfquad = fitcdfquad(activtimes, cdfthresh)
-            all_cdfquad[i, j, 1:6] = cdfquad[1:6]
-
-            # Try squeezing in three-step fits
-            cdf3 = fitcdf3step(activtimes, cdfthresh)
-            all_cdf3[i, j, 1:6] = cdf3[1:6]
-        end
+        p3, rms3 = fitmodel(tactiv_alldsets, nicenames, durations, cdfthresh, 
+                    threehit_loglhood_total, threehit_cdf)
+        all_p3[j, :] = p3[1:end-1]
+        all_rms3[j, :] = rms3
     end
 
     # Plot slope and goodness of linear vs quadratic fits
     # as a function of the threshold fraction
     # linfits, quadfits, allnames, fracrange, fname
 
-    allplots = plotrobustness(all_cdflin, all_cdfquad, all_cdf3, filelistclean, 
-                    fluothreshrange; fluothresh_default=fluothresh_default)
+    allplots = plotrobustness((all_p1, all_p2, all_p3), 
+                    (all_rms1, all_rms2, all_rms3), fnames, fluothreshrange; 
+                    fluothresh_default=fracabove_default)
     
     # Display and save the resulting plots
     ppp, pp2, pp3 = allplots
 
-    param_names = ["k", "t0"]
+    param_names = ["kappa", "t0"]
     for i in 1:1:2
         nm = param_names[i]
-        fname = joinpath(plotfolder, "paramfits_$(nm)_vs_threshold.pdf")
+        fname = joinpath(plotdir, "paramfits_$(nm)_vs_threshold.pdf")
         display(ppp[i])
         pl.savefig(ppp[i], fname)
     end
 
-    fname = joinpath(plotfolder, "linear_vs_quad_fitRMS.pdf")
+    fname = joinpath(plotdir, "onehit_vs_twohit_fitRMS.pdf")
     display(pp2)
     if dosave
         pl.savefig(pp2, fname)
     end
 
-    fname = joinpath(plotfolder, "best12_vs_3-step_fitRMS.pdf")
+    fname = joinpath(plotdir, "best12_vs_3-hit_fitRMS.pdf")
     display(pp3)
     if dosave
         pl.savefig(pp3, fname)
@@ -1179,6 +864,7 @@ end
 
 # Run the analysis
 function (@main)(_)
-    fit_ml_all_datasets(fracabove=0.8, cdfthresh=0.75)
+    #fit_ml_all_datasets(fracabove=0.8, cdfthresh=0.75)
+    robustness_vs_thresh_main(fracabove_default=0.8, cdfthresh=0.75)
     return 0
 end
