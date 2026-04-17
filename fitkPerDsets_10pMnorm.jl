@@ -282,11 +282,13 @@ function threehit_cdf(t::Array, conc::Float64,
     kc = kappa * conc
     tt0 = clamp.(t .- t0, 0.0, Inf)
     exptt0 = exp.(-kc .* tt0)
-    cdf = ones(size(tt0))
-    cdf .+= (k2 * (3.0*kc*kc - 3.0*kc*k2 + k2*k2) / (kc - k2)^3) .* exptt0
-    cdf .+= (kc / (k2 - kc))^3 .* exp.(-k2 .* tt0)
-    cdf .+= ((kc * k2 * (2.0*kc - k2))/(kc - k2)^2) .* tt0 .* exptt0
-    cdf .+= ((kc*kc * k2)/(2.0*kc - 2.0*k2)) .* (tt0 .* tt0) .* exptt0
+    kdif = k2 - kc
+    cdf = -(k2 * (3.0*kc*kc - 3.0*kc*k2 + k2*k2) / kdif^3) .* exptt0
+    cdf .+= ((kc * k2 * (2.0*kc - k2))/kdif^2) .* tt0 .* exptt0
+    cdf .-= ((0.5 * kc*kc * k2) / kdif) .* (tt0 .* tt0) .* exptt0
+    cdf .+= (kc / kdif)^3 .* exp.(-k2 .* tt0)
+    cdf .+= 1.0
+    cdf = clamp.(cdf, 1e-12, 1.0 - 1e-12)
     return cdf
 end
 
@@ -294,8 +296,16 @@ end
 """ CCDF """
 function threehit_ccdf(t::Array, conc::Float64, 
         kappa::Float64, k2::Float64; t0::Float64=0.0)
-    cdf = threehit_cdf(t, conc, kappa, k2; t0=t0)
-    return 1.0 .- cdf
+    kc = kappa * conc
+    tt0 = clamp.(t .- t0, 0.0, Inf)
+    exptt0 = exp.(-kc .* tt0)
+    kdif = k2 - kc
+    ccdf = (k2 * (3.0*kc*kc - 3.0*kc*k2 + k2*k2) / kdif^3) .* exptt0
+    ccdf .-= ((kc * k2 * (2.0*kc - k2))/kdif^2) .* tt0 .* exptt0
+    ccdf .+= ((0.5 * kc*kc * k2) / kdif) .* (tt0 .* tt0) .* exptt0
+    ccdf .-= (kc / kdif)^3 .* exp.(-k2 .* tt0)
+    ccdf = clamp.(ccdf, 1e-12, 1.0 - 1e-12)
+    return ccdf
 end
 
 
@@ -305,9 +315,10 @@ function threehit_pdf(t::Array, conc::Float64,
     kc = kappa * conc
     tt0 = clamp.(t .- t0, 0.0, Inf)
     exptt0 = exp.(-kc .* tt0)
-    pdf = (0.5 / (k2 - kc)) .* tt0.*tt0 .* exptt0
-    pdf .-= (tt0 .* exptt0) ./ (kc - k2)^2 
-    pdf .+= (exptt0 .- exp.(-k2 .* tt0)) ./ (kc - k2)^3 
+    kdif = k2 - kc
+    pdf = (0.5 / kdif) .* tt0.*tt0 .* exptt0
+    pdf .-= (tt0 .* exptt0) ./ kdif^2 
+    pdf .+= (exptt0 .- exp.(-k2 .* tt0)) ./ kdif^3 
     pdf .*= (kc^3 * k2)
     return pdf
 end
@@ -331,18 +342,15 @@ function threehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing
         nc2 = (ncell - nc0 - nc1)
         lowerlim = max(1, klim0-1)
         if nc0 > 0
-            cdf0 = max(threehit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1], 1e-12)
-            ll = nc0 * log(cdf0)
+            ll = nc0 * log(threehit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
         else
             ll = 0.0
         end
         # Three-hit model can be numerically unstable; clamp small probabilities.
         pdfvals = threehit_pdf(times[klim0:klim1], conc, kappa, k2; t0=t0)
-        pdfvals = clamp.(pdfvals, 1e-14, Inf)
         ll += sum(log.(pdfvals))
         if nc2 > 0
-            ccdf_val = max(threehit_ccdf([te], conc, kappa, k2; t0=t0)[1], 1e-12)
-            ll += nc2 * log(ccdf_val)
+            ll += nc2 * log(threehit_ccdf([te], conc, kappa, k2; t0=t0)[1])
         end
     end
     return ll
@@ -389,11 +397,13 @@ Arguments:
 - cdffct: the CDF function to use (e.g., onehit_cdf, twohit_cdf)
 
 Returns:
-- rmserr: the root-mean-squared error computed over all datasets combined
+- rms_errors: the root-mean-squared error computed on each dataset
+- overall_rms: the total RMS across all datasets
 """
 function compute_rms_all_dsets(p_all, tu_all, cumuls_all, ilim0s_all, 
                                 ilim1s_all, concs_all, cdffct)
     n_dsets = length(tu_all)
+    rms_errors = zeros(Float64, n_dsets)
     sres_total = 0.0
     npts_total = 0
     
@@ -416,13 +426,17 @@ function compute_rms_all_dsets(p_all, tu_all, cumuls_all, ilim0s_all,
         cdfestim = cdffct(tu[rms_i:ilim1], conc, kappa, k2; t0=t0)
         
         # Accumulate squared residuals
-        sres_total += sum((cumul[rms_i:ilim1] .- cdfestim).^2)
-        npts_total += (ilim1 - rms_i + 1)
+        dataset_sres = sum((cumul[rms_i:ilim1] .- cdfestim).^2)
+        dataset_npts = (ilim1 - rms_i + 1)
+        rms_errors[n] = sqrt(dataset_sres / dataset_npts)
+
+        sres_total += dataset_sres
+        npts_total += dataset_npts
     end
-    
-    # Compute overall RMS error
-    rmserr = sqrt(sres_total / npts_total)
-    return rmserr
+
+    # Compute overall RMS error for the full fit across all datasets
+    overall_rms = sqrt(sres_total / npts_total)
+    return rms_errors, overall_rms
 end
 
 
@@ -586,8 +600,9 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
     end
 
     # RMS error on the cdf across all datasets
-    rmserr = compute_rms_all_dsets(fit_params, tu_all, cumuls_all, 
-                                    k0_all, k1_all, concs_all, cdffct)
+    rms_per_dset, rmserr = compute_rms_all_dsets(
+        fit_params, tu_all, cumuls_all, 
+        k0_all, k1_all, concs_all, cdffct)
     
     # Use minus log-likelihood instead, should be minimized
     #rmserr = cost([slope, t0])
@@ -604,7 +619,7 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
     =#
     result = Array{Float64}(vcat(fit_params, [rmserr]))
 
-    return result
+    return result, rms_per_dset
 end
 
 
@@ -938,8 +953,9 @@ function fit_ml_all_datasets(;
     println("\n" * "-"^70)
     println("Fitting ONE-HIT model (kappa, k2, one t0 per dataset)...")
     println("-"^70)
-    onehit_result = fitmodel(tactiv_alldsets, nicenames, durations, cdfthresh, 
-                             onehit_loglhood_total, onehit_cdf)
+    onehit_result, onehit_all_rms = fitmodel(tactiv_alldsets, 
+                    nicenames, durations, cdfthresh, 
+                    onehit_loglhood_total, onehit_cdf)
     onehit_params = onehit_result[1:end-1]
     onehit_k2 = onehit_params[1]
     onehit_kappas = onehit_result[2:1+n_dsets]
@@ -958,8 +974,9 @@ function fit_ml_all_datasets(;
     println("\n" * "-"^70)
     println("Fitting TWO-HIT model (kappa, k2, one t0 per dataset)...")
     println("-"^70)
-    twohit_result = fitmodel(tactiv_alldsets, nicenames, durations, cdfthresh,
-                             twohit_loglhood_total, twohit_cdf)
+    twohit_result, twohit_all_rms = fitmodel(tactiv_alldsets, 
+                        nicenames, durations, cdfthresh,
+                        twohit_loglhood_total, twohit_cdf)
     twohit_params = twohit_result[1:end-1]
     twohit_k2 = twohit_params[1]
     twohit_kappas = twohit_result[2:1+n_dsets]
@@ -978,8 +995,9 @@ function fit_ml_all_datasets(;
     println("\n" * "-"^70)
     println("Fitting THREE-HIT model (kappa, k2, one t0 per dataset)...")
     println("-"^70)
-    threehit_result = fitmodel(tactiv_alldsets, nicenames, durations, cdfthresh,
-                             threehit_loglhood_total, threehit_cdf)
+    threehit_result, threehit_all_rms = fitmodel(tactiv_alldsets, 
+                            nicenames, durations, cdfthresh,
+                            threehit_loglhood_total, threehit_cdf)
     threehit_params = threehit_result[1:end-1]
     threehit_k2 = threehit_params[1]
     threehit_kappas = threehit_result[2:1+n_dsets]
@@ -998,10 +1016,19 @@ function fit_ml_all_datasets(;
     println("\n" * "="^70)
     println("RMS ERROR COMPARISON")
     println("="^70)
+
+    println("RMS per dataset:")
+    for (i, t0) in enumerate(threehit_t0s)
+        println(@sprintf "\n    Dataset %d (%s), one-hit = %.6e" i nicenames[i] onehit_all_rms[i])
+        println(@sprintf "    Dataset %d (%s), two-hit = %.6e" i nicenames[i] twohit_all_rms[i])
+        println(@sprintf "    Dataset %d (%s), three-hit = %.6e" i nicenames[i] threehit_all_rms[i])
+    end
     
-    println(@sprintf "\nOne-hit model:  RMS error = %.6e" onehit_rms)
-    println(@sprintf "Two-hit model:  RMS error = %.6e" twohit_rms)
-    println(@sprintf "Three-hit model:  RMS error = %.6e" threehit_rms)
+    println("\n" * "-"^70)
+    println("Total RMS:")
+    println(@sprintf "    One-hit model:  RMS error = %.6e" onehit_rms)
+    println(@sprintf "    Two-hit model:  RMS error = %.6e" twohit_rms)
+    println(@sprintf "    Three-hit model:  RMS error = %.6e" threehit_rms)
     
     improvement = (onehit_rms - twohit_rms) / onehit_rms * 100
     if improvement > 0
@@ -1063,8 +1090,95 @@ function fit_ml_all_datasets(;
 end
 
 
+
+# Robustness analysis
+# as we vary the fluorescence threshold
+# Main analysis + plotting function for varying the fluorescence threshold
+function robustness_vs_thresh_main(;
+    datadir="data/JR064_tracks",
+    plotdir="figures/ml_fits_kperdset_10pMnorm/",
+    fracabove_default=0.8,
+    cdfthresh=0.75)
+    # There have been duplications in the tracks files, some tracks are the same data:
+    # 1 pM and 10pM_z1 are the same
+    # 1pM_2 and 10pM_2 are the same, and 10pM_2_z1 is nearly the same
+    # Remove the apparently duplicate/mislabeled 10pM ones from the summary plot. 
+    duplicatetracks = ["10pM_2.csv", "10pM_z1.csv", "10pM_2_z1.csv"]
+    rejects = collect(any(contains(x, a) for a in duplicatetracks) for x in filelist)
+    filelistclean = collect(filelist[i] for i in 1:1:length(rejects) if !rejects[i])
+
+    nfluopts = 50
+    
+    # Save CDF fits for each file and each threshold fraction tried
+    all_cdflin = zeros(Float64, length(filelistclean), nfluopts, 6)
+    all_cdfquad = zeros(Float64, length(filelistclean), nfluopts, 6)
+    all_cdf3 = zeros(Float64, length(filelistclean), nfluopts, 6)
+    fluothreshrange = collect(LinRange(0.1, 1.5, nfluopts))
+
+    for (i, fi) in enumerate(filelistclean)
+        println(fi)
+        path = joinpath(datadir, fi)
+        greentrajs = preptrajdata(path; ch="MEAN_INTENSITY_CH2", filterpms=filterpms)  # Calcium fluorescence
+        
+        # Plot these raw trajectories
+        fi2 = replace(fi, "0." => "0-")
+        fi2 = replace(fi2, ".csv" => "")
+
+        # Repeat analysis for a range of fluorescence thresholds
+        for j in 1:1:nfluopts
+            activtimes, activfluos, thresh = findactivtimes_thresh(
+                greentrajs; fracabove=fluothreshrange[j], disp=false)
+        
+            # Fit an exponential on the CDF
+            cdfparams = fitcdfslope(activtimes, cdfthresh)
+            all_cdflin[i, j, 1:6] = cdfparams[1:6]
+
+            # Compare to quadratic fit with RMS metric for goodness of fit
+            cdfquad = fitcdfquad(activtimes, cdfthresh)
+            all_cdfquad[i, j, 1:6] = cdfquad[1:6]
+
+            # Try squeezing in three-step fits
+            cdf3 = fitcdf3step(activtimes, cdfthresh)
+            all_cdf3[i, j, 1:6] = cdf3[1:6]
+        end
+    end
+
+    # Plot slope and goodness of linear vs quadratic fits
+    # as a function of the threshold fraction
+    # linfits, quadfits, allnames, fracrange, fname
+
+    allplots = plotrobustness(all_cdflin, all_cdfquad, all_cdf3, filelistclean, 
+                    fluothreshrange; fluothresh_default=fluothresh_default)
+    
+    # Display and save the resulting plots
+    ppp, pp2, pp3 = allplots
+
+    param_names = ["k", "t0"]
+    for i in 1:1:2
+        nm = param_names[i]
+        fname = joinpath(plotfolder, "paramfits_$(nm)_vs_threshold.pdf")
+        display(ppp[i])
+        pl.savefig(ppp[i], fname)
+    end
+
+    fname = joinpath(plotfolder, "linear_vs_quad_fitRMS.pdf")
+    display(pp2)
+    if dosave
+        pl.savefig(pp2, fname)
+    end
+
+    fname = joinpath(plotfolder, "best12_vs_3-step_fitRMS.pdf")
+    display(pp3)
+    if dosave
+        pl.savefig(pp3, fname)
+    end
+    return 0
+end
+
+
+
 # Run the analysis
 function (@main)(_)
-    fit_ml_all_datasets(fracabove=0.8, cdfthresh=0.7)
+    fit_ml_all_datasets(fracabove=0.8, cdfthresh=0.75)
     return 0
 end
