@@ -181,12 +181,9 @@ function plot_cdf_vs_kobs_fits(times, cdfpoints, concs, all_params)
     
     for (i, c) in enumerate(concs)
         color = cmap[i / n_concs]
-        if i % 4 == 0
-            conc_str = @sprintf "%.2f pM" c
-            pl.plot!(p, times, cdfpoints[i, :], ls=:solid, color=color, label=conc_str)
-        else
-            pl.plot!(p, times, cdfpoints[i, :], ls=:solid, color=color, label="")
-        end
+        conc_str = @sprintf "%.2f pM" c
+        lbl = i % 4 == 0 ? conc_str : ""
+        pl.plot!(p, times, cdfpoints[i, :], ls=:solid, color=color, label=lbl)
         pl.plot!(p, times, obs_curves[i, :], ls=:dash, color=color, label="")
     end
     return p

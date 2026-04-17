@@ -274,6 +274,103 @@ function twohit_loglhood_total(p_all, times_all, concs, ncells,
 end
 
 
+# Three-hit model, for complete comparison
+
+""" CDF """
+function threehit_cdf(t::Array, conc::Float64, 
+        kappa::Float64, k2::Float64; t0::Float64=0.0)
+    kc = kappa * conc
+    tt0 = clamp.(t .- t0, 0.0, Inf)
+    exptt0 = exp.(-kc .* tt0)
+    cdf = ones(size(tt0))
+    cdf .+= (k2 * (3.0*kc*kc - 3.0*kc*k2 + k2*k2) / (kc - k2)^3) .* exptt0
+    cdf .+= (kc / (k2 - kc))^3 .* exp.(-k2 .* tt0)
+    cdf .+= ((kc * k2 * (2.0*kc - k2))/(kc - k2)^2) .* tt0 .* exptt0
+    cdf .+= ((kc*kc * k2)/(2.0*kc - 2.0*k2)) .* (tt0 .* tt0) .* exptt0
+    return cdf
+end
+
+
+""" CCDF """
+function threehit_ccdf(t::Array, conc::Float64, 
+        kappa::Float64, k2::Float64; t0::Float64=0.0)
+    cdf = threehit_cdf(t, conc, kappa, k2; t0=t0)
+    return 1.0 .- cdf
+end
+
+
+""" PDF """ 
+function threehit_pdf(t::Array, conc::Float64, 
+        kappa::Float64, k2::Float64; t0::Float64=0.0)
+    kc = kappa * conc
+    tt0 = clamp.(t .- t0, 0.0, Inf)
+    exptt0 = exp.(-kc .* tt0)
+    pdf = (0.5 / (k2 - kc)) .* tt0.*tt0 .* exptt0
+    pdf .-= (tt0 .* exptt0) ./ (kc - k2)^2 
+    pdf .-= exptt0 ./ (kc - k2)^3 
+    pdf .+= exp.(-k2 .* tt0) ./ (kc - k2)^3
+    pdf .*= (kc^3 * k2)
+    return pdf
+end
+
+
+"""
+log-likelihood for 1 dataset for the 3-hit model
+"""
+function threehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
+    kappa, k2, t0 = p
+    if te === nothing
+        te = times[min(klim1, length(times))]
+    end
+    if (kappa < 0.0) || (k2 < 0.0) || (times[1] < t0)
+        ll = -1e8
+    else
+        # Note that ncell includes those never activated, 
+        # whereas times only includes cells eventually activated
+        nc0 = klim0 - 1  # number of cells with t_activ = 0
+        nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
+        nc2 = (ncell - nc0 - nc1)
+        lowerlim = max(1, klim0-1)
+        if nc0 > 0
+            cdf0 = max(threehit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1], 1e-12)
+            ll = nc0 * log(cdf0)
+        else
+            ll = 0.0
+        end
+        # Three-hit model can be numerically unstable; clamp small probabilities.
+        pdfvals = threehit_pdf(times[klim0:klim1], conc, kappa, k2; t0=t0)
+        pdfvals = clamp.(pdfvals, 1e-14, Inf)
+        ll += sum(log.(pdfvals))
+        if nc2 > 0
+            ccdf_val = max(threehit_ccdf([te], conc, kappa, k2; t0=t0)[1], 1e-12)
+            ll += nc2 * log(ccdf_val)
+        end
+    end
+    return ll
+end
+
+
+"""
+Log-likelihood across datasets for the 3-hit model
+"""
+function threehit_loglhood_total(p_all, times_all, concs, ncells, 
+            klim0s, klim1s; te_all=nothing)
+    # From the lists of times, klim0s, klim1s, ncells
+    # compute likelihood contribution from each dataset, 
+    # with one t0 per dataset, and combine at the end. 
+    n_dsets = length(concs)
+    ll_total = 0.0
+    for n in 1:1:n_dsets
+        kappa = p_all[1 + n]
+        t0 = p_all[1 + n_dsets + n]
+        p = [kappa, p_all[1], t0]  # kappa, k2, t0 for dataset n
+        ll = threehit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
+                        klim0s[n], klim1s[n]; te=te_all[n])
+        ll_total += ll
+    end
+    return ll_total
+end
+
 
 ### RMS ERROR COMPUTATION ###
 
@@ -524,13 +621,15 @@ Arguments:
 - cdfthresh: CDF threshold used for fitting
 - kappa1, k2_1, t0_1: parameters for one-hit model
 - kappa2, k2_2, t0_2: parameters for two-hit model
+- kappa3, k2_3, t0_3: parameters for three-hit model
 - conc: concentration for this dataset
-- cdffct1, cdffct2: CDF functions for the two models
+- cdffct1, cdffct2, cdffct3: CDF functions for the three models
 """
 function plot_single_dataset_cdf(cdf_prep_results_one, name, duration, cdfthresh,
                                   kappa1, k2_1, t0_1,
                                   kappa2, k2_2, t0_2,
-                                  cdffct1, cdffct2)
+                                  kappa3, k2_3, t0_3,
+                                  cdffct1, cdffct2, cdffct3)
     # Print info to trace back issues
     println("For dataset:", name)
     println("Duration:", duration)
@@ -541,6 +640,9 @@ function plot_single_dataset_cdf(cdf_prep_results_one, name, duration, cdfthresh
     println("kappa2:", kappa2)
     println("k2_2:", k2_2)
     println("t0_2:", t0_2)
+    println("kappa3:", kappa3)
+    println("k2_3:", k2_3)
+    println("t0_3:", t0_3)
 
     # Prepare empirical CDF
     conc, ncells, ilim0, ilim1, tlim, tu, cumul = cdf_prep_results_one
@@ -579,6 +681,12 @@ function plot_single_dataset_cdf(cdf_prep_results_one, name, duration, cdfthresh
     y2 = cdf2 .* ncells
     pl.plot!(p, trange, y2, label="2-hit model", 
              color=:red, linewidth=2, linestyle=:dash)
+
+    # Three-hit model
+    cdf3 = cdffct3(trange, conc, kappa3, k2_3; t0=t0_3)
+    y3 = cdf3 .* ncells
+    pl.plot!(p, trange, y3, label="3-hit model", 
+             color=:purple, linewidth=2, linestyle=:dot)
     
     pl.xlabel!(p, "Time (s)", fontsize=12)
     pl.ylabel!(p, "Number of activated cells", fontsize=12)
@@ -598,13 +706,14 @@ Arguments:
 - cdfthresh: CDF threshold used for fitting
 - onehit_params: [kappa, k2, t0_1, t0_2, ...]
 - twohit_params: [kappa, k2, t0_1, t0_2, ...]
-- onehit_cdf, twohit_cdf: CDF functions
-- onehit_rms, twohit_rms: RMS errors for model comparison
+- threehit_params: [kappa, k2, t0_1, t0_2, ...]
+- onehit_cdf, twohit_cdf, threehit_cdf: CDF functions
+- onehit_rms, twohit_rms, threehit_rms: RMS errors for model comparison
 """
 function plot_ml_cdf_comparison(cdf_prep_results, nicenames, 
-                                 onehit_params, twohit_params,
-                                 onehit_cdf, twohit_cdf,
-                                 onehit_rms, twohit_rms)
+                                 onehit_params, twohit_params, threehit_params,
+                                 onehit_cdf, twohit_cdf, threehit_cdf,
+                                 onehit_rms, twohit_rms, threehit_rms)
     (concs_all, ncell_all, k0_all, k1_all, 
                 te_all, tu_all, cumuls_all) = cdf_prep_results
     n_dsets = length(tu_all)
@@ -636,6 +745,7 @@ function plot_ml_cdf_comparison(cdf_prep_results, nicenames,
         # Get parameters for this dataset
         k2_1, kappa_1, t0_1 = onehit_params[1], onehit_params[1+i], onehit_params[1+n_dsets+i]
         k2_2, kappa_2, t0_2 = twohit_params[1], twohit_params[1+i], twohit_params[1+n_dsets+i]
+        k2_3, kappa_3, t0_3 = threehit_params[1], threehit_params[1+i], threehit_params[1+n_dsets+i]
         
         # Generate smooth curves
         trange = collect(LinRange(0, tu[end], 100))
@@ -645,6 +755,9 @@ function plot_ml_cdf_comparison(cdf_prep_results, nicenames,
         
         cdf2 = twohit_cdf(trange, conc, kappa_2, k2_2; t0=t0_2)
         y2 = cdf2 .* ncells
+        
+        cdf3 = threehit_cdf(trange, conc, kappa_3, k2_3; t0=t0_3)
+        y3 = cdf3 .* ncells
         
         # Plot on subplot i
         pl.plot!(p[i], goodt, ncumul, linetype=:steppost,
@@ -660,6 +773,9 @@ function plot_ml_cdf_comparison(cdf_prep_results, nicenames,
         
         pl.plot!(p[i], trange, y2, label="2-hit",
                  color=:red, linewidth=1.8, linestyle=:dash)
+        
+        pl.plot!(p[i], trange, y3, label="3-hit",
+                 color=:purple, linewidth=1.8, linestyle=:dot)
         
         pl.xlabel!(p[i], "Time (s)", fontsize=10)
         pl.ylabel!(p[i], "Fraction active cells", fontsize=10)
@@ -678,12 +794,12 @@ end
 
 
 """
-Plot model curves across concentrations for both 1-hit and 2-hit models.
+Plot model curves across concentrations for 1-hit, 2-hit, and 3-hit models.
 Selects the dataset with the most cells for each concentration and plots
 its model curves. Uses magma colormap for concentration-dependent coloring.
 """
-function plot_models_vs_concentration(nicenames, ncell_all, onehit_params, twohit_params,
-                                       onehit_cdf, twohit_cdf, durations)
+function plot_models_vs_concentration(nicenames, ncell_all, onehit_params, twohit_params, threehit_params,
+                                       onehit_cdf, twohit_cdf, threehit_cdf, durations)
     
     # Extract concentrations and group by concentration
     nicenames, lblconcs = cleannames(nicenames)
@@ -725,9 +841,14 @@ function plot_models_vs_concentration(nicenames, ncell_all, onehit_params, twohi
         k2_2 = twohit_params[1]
         t0_2 = 0.0
         
+        kappa_3 = threehit_params[1 + dset_idx]
+        k2_3 = threehit_params[1]
+        t0_3 = 0.0
+        
         # Compute CDFs
         cdf1 = onehit_cdf(trange, conc, kappa_1, k2_1; t0=t0_1)
         cdf2 = twohit_cdf(trange, conc, kappa_2, k2_2; t0=t0_2)
+        cdf3 = threehit_cdf(trange, conc, kappa_3, k2_3; t0=t0_3)
         
         # Plot 1-hit model
         label_1hit = @sprintf "1-hit: %.2g pM" conc
@@ -738,6 +859,11 @@ function plot_models_vs_concentration(nicenames, ncell_all, onehit_params, twohi
         label_2hit = @sprintf "2-hit: %.2g pM" conc
         pl.plot!(p, trange, cdf2, label=label_2hit, linestyle=:dash,
                 linewidth=2.5, color=color, alpha=1.0)
+
+        # Plot 3-hit model
+        label_3hit = @sprintf "3-hit: %.2g pM" conc
+        pl.plot!(p, trange, cdf3, label=label_3hit, linestyle=:dot,
+                linewidth=2.5, color=:purple, alpha=1.0)
     end
     
     pl.title!(p, "Model predictions: 1-hit vs 2-hit (color = concentration)", fontsize=12)
@@ -849,13 +975,34 @@ function fit_ml_all_datasets(;
         println(@sprintf "    Dataset %d (%s): t0 = %.4f s" i nicenames[i] t0)
     end
     
-    # Step 4: Compute and compare RMS errors
+    # Step 4: Fit the three-hit model
+    println("\n" * "-"^70)
+    println("Fitting THREE-HIT model (kappa, k2, one t0 per dataset)...")
+    println("-"^70)
+    threehit_result = fitmodel(tactiv_alldsets, nicenames, durations, cdfthresh,
+                             threehit_loglhood_total, threehit_cdf)
+    threehit_params = threehit_result[1:end-1]
+    threehit_k2 = threehit_params[1]
+    threehit_kappas = threehit_result[2:1+n_dsets]
+    threehit_t0s = threehit_result[2+n_dsets:end-1]
+    threehit_rms = threehit_result[end]
+    
+    println("\nThree-hit model results:")
+    println(@sprintf "  k2        = %.4f s^-1" threehit_k2)
+    println("  t0 per dataset:")
+    for (i, t0) in enumerate(threehit_t0s)
+        println(@sprintf "    Dataset %d (%s):  κc_0 (kappa * 1 pM) = %.4f s^-1" i nicenames[i] threehit_kappas[i])
+        println(@sprintf "    Dataset %d (%s): t0 = %.4f s" i nicenames[i] t0)
+    end
+
+    # Step 5: Compute and compare RMS errors
     println("\n" * "="^70)
     println("RMS ERROR COMPARISON")
     println("="^70)
     
     println(@sprintf "\nOne-hit model:  RMS error = %.6e" onehit_rms)
     println(@sprintf "Two-hit model:  RMS error = %.6e" twohit_rms)
+    println(@sprintf "Three-hit model:  RMS error = %.6e" threehit_rms)
     
     improvement = (onehit_rms - twohit_rms) / onehit_rms * 100
     if improvement > 0
@@ -864,7 +1011,7 @@ function fit_ml_all_datasets(;
         println(@sprintf "\nOne-hit model is better by %.1f%%" -improvement)
     end
     
-    # Step 5: Create comparison plots
+    # Step 6: Create comparison plots
     println("\n" * "-"^70)
     println("Generating plots...")
     println("-"^70)
@@ -874,9 +1021,9 @@ function fit_ml_all_datasets(;
     
     # Plot: All datasets, both models
     p_all = plot_ml_cdf_comparison(prep_cdf_res, nicenames, 
-                                    onehit_params, twohit_params, 
-                                    onehit_cdf, twohit_cdf,
-                                    onehit_rms, twohit_rms)
+                                    onehit_params, twohit_params, threehit_params,
+                                    onehit_cdf, twohit_cdf, threehit_cdf,
+                                    onehit_rms, twohit_rms, threehit_rms)
     plot_file = joinpath(plotdir, "ml_cdf_all_datasets_comparison.pdf")
     pl.savefig(p_all, plot_file)
     println("  Saved: $plot_file")
@@ -886,11 +1033,13 @@ function fit_ml_all_datasets(;
         prep_cdf_i = [prep_cdf_res[j][i] for j in eachindex(prep_cdf_res)]
         k2_1, kappa_1, t0_1 = onehit_params[1], onehit_params[1+i], onehit_params[1+n_dsets+i]
         k2_2, kappa_2, t0_2 = twohit_params[1], twohit_params[1+i], twohit_params[1+n_dsets+i]
+        k2_3, kappa_3, t0_3 = threehit_params[1], threehit_params[1+i], threehit_params[1+n_dsets+i]
         p_single = plot_single_dataset_cdf(
             prep_cdf_i, nicenames[i], durations[i], cdfthresh,
             kappa_1, k2_1, t0_1,
             kappa_2, k2_2, t0_2,
-            onehit_cdf, twohit_cdf
+            kappa_3, k2_3, t0_3,
+            onehit_cdf, twohit_cdf, threehit_cdf
         )
         plot_file = joinpath(plotdir, "ml_cdf_dataset_$(i)_$(nicenames[i]).pdf")
         pl.savefig(p_single, plot_file)
@@ -899,8 +1048,8 @@ function fit_ml_all_datasets(;
     
     # Plot: Model curves versus concentration
     ncell_all = prep_cdf_res[2]  # Extract ncell_all from the prepared results
-    p_conc = plot_models_vs_concentration(fnames, ncell_all, onehit_params, twohit_params,
-                                           onehit_cdf, twohit_cdf, durations)
+    p_conc = plot_models_vs_concentration(fnames, ncell_all, onehit_params, twohit_params, threehit_params,
+                                           onehit_cdf, twohit_cdf, threehit_cdf, durations)
     plot_file = joinpath(plotdir, "ml_models_vs_concentration.pdf")
     pl.savefig(p_conc, plot_file)
     println("  Saved: $plot_file")
@@ -909,13 +1058,14 @@ function fit_ml_all_datasets(;
     println("Analysis complete!")
     println("="^70 * "\n")
     
-    return (onehit_params, twohit_params, onehit_rms, twohit_rms,
+    return (onehit_params, twohit_params, threehit_params, 
+            onehit_rms, twohit_rms, threehit_rms,
             nicenames, tactiv_alldsets)
 end
 
 
 # Run the analysis
 function (@main)(_)
-    fit_ml_all_datasets(fracabove=0.8, cdfthresh=0.75)
+    fit_ml_all_datasets(fracabove=0.8, cdfthresh=0.7)
     return 0
 end
