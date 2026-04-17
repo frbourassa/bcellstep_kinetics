@@ -2,10 +2,7 @@
 
 using DataFrames: DataFrames as DF  # all methods available as DF.method
 using CSV: CSV  # all methods available as CSV.method
-using Optim: Optim, optimize, IPNewton
-using LinearAlgebra: UniformScaling, diag, diagm, svd
-using Printf: @sprintf
-using Plots: Plots as pl
+using Statistics: mean
 
 
 ### SHORT UTILITY FUNCTIONS ###
@@ -14,7 +11,7 @@ function padnumber(n)
     return string(n; pad=3)
 end
 
-# From ChatGPT, to replace Python's str.isnumeric() method. 
+# Replace Python's str.isnumeric() method. 
 isnumeric(str::AbstractString) = !isempty(str) && all(isdigit, str)
 
 
@@ -36,6 +33,48 @@ function cleannames(namelist)
     shortnames = collect(map(x -> replace(x, " z2" => ""), shortnames))
     lblconcs = collect(concfromstr(x, "pM", " ") for x in shortnames)  # in pM
     return shortnames, lblconcs
+end
+
+
+"""
+Reading and sorting the list of CSV data files available. 
+"""
+function get_csv_file_names(datadir)
+        # Get all CSV files from the data directory
+    fnames = vec(collect(f for f in readdir(datadir) if endswith(f, ".csv")))
+    
+    if isempty(fnames)
+        error("No CSV files found in $datadir")
+    end
+    
+    # Filter to keep only the approved list of datasets
+    # (excluding low cell count or duplicate datasets)
+    approved_files = [
+        "pHELD-AF594_10pM_z2.csv", 
+        "pHELD-AF594_10pM_2_z2.csv", 
+        "pHELD-AF594_1pM_2.csv", 
+        #"pHELD-AF594_1pM.csv",   # low cell count, dropped dataset
+        "pHELD-AF594_0.1pM.csv",
+        "pHELD-AF594_0.1pM_2.csv", 
+        "pHELD-AF594_0.01pM.csv", 
+        "pHELD-AF594_0.01pM_2.csv"
+    ]
+    fnames = collect(fp for fp in fnames if fp in approved_files)
+    fpaths = collect(joinpath(datadir, f) for f in fnames)
+    
+    if isempty(fpaths)
+        error("No approved CSV files found in $datadir")
+    end
+
+    # Sort names in decreasing concentration order
+    # Extract concentration of each name
+    shortnames, lblconcs = cleannames(fnames)
+    sortidx = reverse(sortperm(lblconcs), dims=1)
+    shortnames = shortnames[sortidx]
+    fnames = fnames[sortidx]
+    fpaths = fpaths[sortidx]
+
+    return fnames, fpaths
 end
 
 
@@ -353,5 +392,113 @@ function prepcdf(tactiv, cdfthresh, duration)
     end
     
     return tu, cumul, ilim, ncells, tlim
+end
+
+
+
+### ECDF NORMALIZATION FUNCTIONS ###
+
+"""
+Based on the highest (10 pM) concentration,
+where all cells are assumed to activate, find the fraction of tracks
+which never activate and effectively come from a distinct sub-population. 
+"""
+function normalize_topconc(concs_all, ncell_all, cumuls_all)
+    # Find dataset(s) with the highest concentration
+    maxconc = maximum(concs_all)
+    where_max = findall(x -> (x == maxconc), concs_all)
+
+    # Find the fraction of cells that never activate in them 
+    # (highest value in their cumulative fractions)
+    frac_when_maxconc = mean(collect(x[end] for x in cumuls_all[where_max]))
+
+    # For each dataset, rescale cumuls and ncell by removing
+    # the fraction of cells expected to never activate, or
+    # the actual fraction that did not activate, whichever is smallest. 
+    ncell_fix = copy(ncell_all)
+    cumuls_fix = copy(cumuls_all)
+    for i in 1:1:length(concs_all)
+        maxfrac_i = max(cumuls_all[i][end], frac_when_maxconc)
+        cumuls_fix[i] = cumuls_all[i] ./ maxfrac_i
+        ncell_fix[i] = ceil(Int, ncell_all[i] * maxfrac_i)
+    end
+    return ncell_fix, cumuls_fix
+end
+
+
+"""
+Reject inactive tracks (those with missing activation times) based on the number of cells to keep.
+Returns a filtered copy of the DataFrame, dropping columns with missing values up to the number
+of tracks that need to be dropped (total_tracks - ncells_to_keep).
+"""
+function reject_inactive_tracks(tactiv, ncells_to_keep)
+    # Find all columns that contain any missing values (inactive tracks)
+    colnames = DF.names(tactiv)
+    cols_with_missing = [col for col in colnames if any(ismissing, tactiv[:, col])]
+    
+    # Calculate how many tracks need to be dropped
+    ncell_drop = size(tactiv, 2) - ncells_to_keep
+    
+    # Drop the first ncell_drop columns with missing values
+    cols_to_drop = cols_with_missing[1:min(ncell_drop, length(cols_with_missing))]
+    
+    # Create a filtered copy without in-place modification
+    tactiv_filtered = DF.select(tactiv, DF.Not(cols_to_drop))
+    return tactiv_filtered
+end
+
+
+"""
+Prepare all cdfs with normalization, numbers of cells, limit on t0, cutoff time,
+and so on from the list of activation time DataFrames.  
+"""
+function prepare_all_cdfs(tactiv_alldsets, dsetnames, durations, cdfthresh)
+    conc_scale = 1.0  # pM
+    n_dsets = length(tactiv_alldsets)
+    concs_all = []
+    ncell_all = []
+    cumuls_all = []
+    for i in 1:1:n_dsets
+        conc = concfromstr(dsetnames[i], "pM", ' ') / conc_scale
+        # Prepare a unique list of cell number increase times to fit.
+        tactiv = tactiv_alldsets[i]
+        tu, cumul, ilim1, ncells, tlim = prepcdf(tactiv, cdfthresh, durations[i])
+        push!(cumuls_all, cumul)
+        push!(concs_all, conc)
+        push!(ncell_all, ncells)
+    end
+
+    # Adjust cell numbers based on the max conc. conditions
+    ncell_all, cumuls_all = normalize_topconc(concs_all, ncell_all, cumuls_all)
+
+    # Analyze again now that we have determined the number of tracks to reject in each
+    # dataset; this is necessary to stop at the correct cdfthresh. 
+    k0_all = []
+    k1_all = []
+    te_all = []
+    tu_all = []
+    cumuls_all = []  # Recompute. 
+    for i in 1:1:n_dsets
+        ncells = ncell_all[i]  # Corrected cell number
+        # Prepare a unique list of cell number increase times to fit.
+        tactiv = tactiv_alldsets[i]
+        tactiv_filtered = reject_inactive_tracks(tactiv, ncells)
+        tu, cumul, ilim1, ncells_2, tlim = prepcdf(tactiv_filtered, cdfthresh, durations[i])
+        if ncells_2 !== ncells
+            println("Warning: after normalization, number of cells to fit changed for dataset ", dsetnames[i])
+            println("Before: ncells = ", ncells, " , after: ncells = ", ncells_2)
+            error("See above")
+        end
+        # Find first cell with t > 0: use CDF term instead of pdf in log-likelihood
+        # for cells before that, whose activation time could be before t = 0. 
+        ilim0 = findfirst(tu .> 0.0)
+        push!(tu_all, tu)
+        push!(cumuls_all, cumul)
+        push!(k0_all, ilim0)
+        push!(k1_all, ilim1)
+        push!(te_all, tlim)
+    end
+
+    return concs_all, ncell_all, k0_all, k1_all, te_all, tu_all, cumuls_all
 end
 

@@ -5,19 +5,11 @@ Also, log-likelihood functions.
 François X. P. Bourassa, 2026
 =#
 
-using DataFrames: DataFrames as DF
-using Plots: Plots as pl
-using Printf: @sprintf
-using Statistics: mean
-using Measures: mm
-using Optim: Optim, optimize, IPNewton
-using LinearAlgebra: UniformScaling, diag, diagm, svd
 
-
-### MODELS PDFs AND CDFs ###
+### ONE-STEP MODEL (for k_obs) ###
 
 """
-For observed k fit, showing there may be a cell activation-limited step
+For observed k fit, a simple 1-step (exponential) cdf. 
 """
 function expocdf(t::Array, rate::Float64; t0::Float64=0.0)
     rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
@@ -25,6 +17,67 @@ function expocdf(t::Array, rate::Float64; t0::Float64=0.0)
     return cdf
 end
 
+
+"""
+Probability density for a 1-step model (exponential). 
+"""
+function expopdf(t::Array, rate::Float64; t0::Float64=0.0)
+    rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
+    pdf = rate .* exp.(-rtt0)
+    return pdf
+end
+
+function logexpopdf(t::Array, rate::Float64; t0::Float64=0.0)
+    rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
+    return log(rate) .- rtt0
+end
+
+function expoccdf(t::Array, rate::Float64; t0::Float64=0.0)
+    rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
+    return exp.(-rtt0)
+end
+
+
+function logexpoccdf(t::Array, rate::Float64; t0::Float64=0.0)
+    rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
+    return -rtt0
+end
+
+
+### Log-likelihood
+
+"""
+log-likelihood for 1 dataset for the 1-step model
+"""
+function expo_loglhood_1dset(p, times, ncell, klim0, klim1; te=nothing)
+    k, t0 = p
+    if te === nothing
+        te = times[min(klim1, length(times))]
+    end
+    if (k < 0.0) || (times[1] < t0) 
+        ll = -1e8
+    else
+        # Note that ncell includes those never activated, 
+        # whereas times only includes cells eventually activated
+        nc0 = klim0 - 1  # number of cells with t_activ = 0
+        nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
+        nc2 = ncell - nc0 - nc1
+        if nc0 > 0
+            ll = nc0 * log(expocdf([0.0], k; t0=t0)[1])
+        else
+            ll = 0.0
+        end
+        ll += sum(logexpopdf(times[klim0:klim1], k; t0=t0))
+        if nc2 > 0
+            ll += nc2 * logexpoccdf([te], k; t0=t0)[1]
+        end
+    end
+    return ll
+end
+
+
+
+### ONE-HIT MODEL ###
 
 """
 One-hit model with cell activation
@@ -68,6 +121,63 @@ function onehit_ccdf(t::Array, conc::Float64,
     ccdf = fctpart ./ kdiff
     return ccdf
 end
+
+
+
+# Log-likelihood functions
+
+"""
+log-likelihood for 1 dataset for the 1-hit model
+"""
+function onehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
+    kappa, k2, t0 = p
+    if te === nothing
+        te = times[min(klim1, length(times))]
+    end
+    if (kappa < 0.0) || (k2 < 0.0) || (times[1] < t0) 
+        ll = -1e8
+    else
+        # Note that ncell includes those never activated, 
+        # whereas times only includes cells eventually activated
+        nc0 = klim0 - 1  # number of cells with t_activ = 0
+        nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
+        nc2 = ncell - nc0 - nc1
+        lowerlim = max(1, klim0-1)
+        if nc0 > 0
+            ll = nc0 * log(onehit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
+        else
+            ll = 0.0
+        end
+        ll += sum(log.(onehit_pdf(times[klim0:klim1], conc, kappa, k2; t0=t0)))
+        if nc2 > 0
+            ll += nc2 * log(onehit_ccdf([te], conc, kappa, k2; t0=t0)[1])
+        end
+    end
+    return ll
+end
+
+
+"""
+Log-likelihood across datasets for the 1-hit model
+"""
+function onehit_loglhood_total(p_all, times_all, concs, ncells, 
+            klim0s, klim1s; te_all=nothing)
+    # From the lists of times, klim0s, klim1s, ncells
+    # compute likelihood contribution from each dataset, 
+    # with one t0 per dataset, and combine at the end. 
+    n_dsets = length(concs)
+    ll_total = 0.0
+    for n in 1:1:n_dsets
+        kappa = p_all[1 + n]
+        t0 = p_all[1 + n_dsets + n]
+        p = [kappa, p_all[1], t0]  # kappa, k2, t0 for dataset n
+        ll = onehit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
+                        klim0s[n], klim1s[n]; te=te_all[n])
+        ll_total += ll
+    end
+    return ll_total
+end
+
 
 
 """
@@ -138,60 +248,7 @@ function twohit_ccdf(t::Array, conc::Float64,
 end
 
 
-### LOG-LIKELIHOOD FUNCTIONS AND DERIVATIVES ###
-
-"""
-log-likelihood for 1 dataset for the 1-hit model
-"""
-function onehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing)
-    kappa, k2, t0 = p
-    if te === nothing
-        te = times[min(klim1, length(times))]
-    end
-    if (kappa < 0.0) || (k2 < 0.0) || (times[1] < t0) 
-        ll = -1e8
-    else
-        # Note that ncell includes those never activated, 
-        # whereas times only includes cells eventually activated
-        nc0 = klim0 - 1  # number of cells with t_activ = 0
-        nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
-        nc2 = ncell - nc0 - nc1
-        lowerlim = max(1, klim0-1)
-        if nc0 > 0
-            ll = nc0 * log(onehit_cdf(times[lowerlim:lowerlim], conc, kappa, k2; t0=t0)[1])
-        else
-            ll = 0.0
-        end
-        ll += sum(log.(onehit_pdf(times[klim0:klim1], conc, kappa, k2; t0=t0)))
-        if nc2 > 0
-            ll += nc2 * log(onehit_ccdf([te], conc, kappa, k2; t0=t0)[1])
-        end
-    end
-    return ll
-end
-
-
-"""
-Log-likelihood across datasets for the 1-hit model
-"""
-function onehit_loglhood_total(p_all, times_all, concs, ncells, 
-            klim0s, klim1s; te_all=nothing)
-    # From the lists of times, klim0s, klim1s, ncells
-    # compute likelihood contribution from each dataset, 
-    # with one t0 per dataset, and combine at the end. 
-    n_dsets = length(concs)
-    ll_total = 0.0
-    for n in 1:1:n_dsets
-        kappa = p_all[1 + n]
-        t0 = p_all[1 + n_dsets + n]
-        p = [kappa, p_all[1], t0]  # kappa, k2, t0 for dataset n
-        ll = onehit_loglhood_1dset(p, times_all[n], concs[n], ncells[n], 
-                        klim0s[n], klim1s[n]; te=te_all[n])
-        ll_total += ll
-    end
-    return ll_total
-end
-
+# Log-likelihood
 
 """
 log-likelihood for 1 dataset for the 1-hit model
@@ -248,7 +305,7 @@ function twohit_loglhood_total(p_all, times_all, concs, ncells,
 end
 
 
-# Three-hit model, for complete comparison
+### THREE-HIT MODEL ###
 
 """ CDF """
 function threehit_cdf(t::Array, conc::Float64, 
@@ -298,6 +355,8 @@ function threehit_pdf(t::Array, conc::Float64,
 end
 
 
+# Log-likelihood
+
 """
 log-likelihood for 1 dataset for the 3-hit model
 """
@@ -320,7 +379,6 @@ function threehit_loglhood_1dset(p, times, conc, ncell, klim0, klim1; te=nothing
         else
             ll = 0.0
         end
-        # Three-hit model can be numerically unstable; clamp small probabilities.
         pdfvals = threehit_pdf(times[klim0:klim1], conc, kappa, k2; t0=t0)
         ll += sum(log.(pdfvals))
         if nc2 > 0

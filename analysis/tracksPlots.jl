@@ -1,6 +1,7 @@
 #=
-Plotting functions to tracks analysis. 
+Plotting functions for tracks analysis. 
 
+François X. P. Bourassa, 2026
 =#
 
 using DataFrames: DataFrames as DF  # all methods available as DF.method
@@ -18,10 +19,10 @@ end
 using .tracksAnalysis: concfromstr, cleannames
 
 
-module modelsML
+module models
     include("modelsML.jl")
 end
-using .modelsML: onehit_cdf, twohit_cdf, threehit_cdf
+using .models: onehit_cdf, twohit_cdf, threehit_cdf, expocdf
 
 
 ### CLEANUP FUNCTIONS ###
@@ -315,7 +316,7 @@ function plotrobustness(fits123, rms123, allnames,
     t0_indices = 1 .+ n_dsets .+ selected
 
     # Use magma colors for the low-concentration datasets, matching their rank among all datasets.
-    all_magma = pl.cgrad(:magma, n_dsets-1, categorical=true)
+    all_magma = pl.cgrad(:magma, n_dsets-2, categorical=true)
     sort_idx = sortperm(lblconcs)
     inverse_rank = zeros(Int, n_dsets)
     for (rank, idx) in enumerate(sort_idx)
@@ -414,7 +415,7 @@ function plotrobustness(fits123, rms123, allnames,
 
     function customlegend(pp, logrmslims, ms_sel, frac_sel)
         logrmsx = 0.65 * (logrmslims[2]-logrmslims[1]) + logrmslims[1]
-        logrmsy = 0.35 * (logrmslims[2]-logrmslims[1]) + logrmslims[1]
+        logrmsy = 0.25 * (logrmslims[2]-logrmslims[1]) + logrmslims[1]
         dx, dy = 0.15, 0.07
 
         rect1 = logrectangle(0.7, 0.42, logrmsx-0.35*dx, logrmsy-length(ms_sel)*dy)

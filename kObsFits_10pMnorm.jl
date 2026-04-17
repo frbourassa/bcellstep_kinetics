@@ -3,14 +3,17 @@ Fit a 1-step activation model on each dataset using
 Maximum Likelihood Estimation and plot the fitted observed 
 effective rate, k_obs, as a function of concentration. 
 
-Variant where we normalize each eCDF to 1, to follow what
-was done in figure S2E. 
+Variant where we normalize each eCDF based on the fraction
+of cells that do not get activated even at 10 pM: these are
+likely dead or anergic B cells, or spurious tracks. We assume
+that sub-population is as abundant in all datasets, and so
+remove at most that fraction of inactive tracks in lower
+concentration conditions. 
 
 This script:
 1. Loads all datasets in JR064_tracks
 2. Preprocesses activation times
-3. Defines one-hit and two-hit models
-3. Fits one-hit and two-hit models across all datasets simultaneously
+3. Fits one-hit, two-hit, three-hit models across all datasets
 4. Computes RMS errors for each model
 5. Generates comparison plots
 
@@ -30,77 +33,16 @@ using LinearAlgebra: UniformScaling, diag, diagm, svd
 module tracksAnalysis
     include("analysis/tracks.jl")
 end
-using .tracksAnalysis: prepalldsets, concfromstr, cleannames, uniquecdf, prepcdf
+using .tracksAnalysis: prepalldsets, concfromstr, cleannames, 
+    prepare_all_cdfs, get_csv_file_names
 
 
-### MODELS PDFs AND CDFs ###
-
-"""
-For observed k fit, a simple 1-step (exponential) cdf. 
-"""
-function expocdf(t::Array, rate::Float64; t0::Float64=0.0)
-    rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
-    cdf = 1.0 .- exp.(-rtt0)
-    return cdf
+module modelsML
+    include("analysis/modelsML.jl")
 end
+using .modelsML: expocdf, expopdf, expoccdf, logexpoccdf, logexpopdf, 
+    expo_loglhood_1dset
 
-
-"""
-Probability density for a 1-step model (exponential). 
-"""
-function expopdf(t::Array, rate::Float64; t0::Float64=0.0)
-    rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
-    pdf = rate .* exp.(-rtt0)
-    return pdf
-end
-
-function logexpopdf(t::Array, rate::Float64; t0::Float64=0.0)
-    rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
-    return log(rate) .- rtt0
-end
-
-function expoccdf(t::Array, rate::Float64; t0::Float64=0.0)
-    rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
-    return exp.(-rtt0)
-end
-
-
-function logexpoccdf(t::Array, rate::Float64; t0::Float64=0.0)
-    rtt0 = clamp!(rate .* (t .- t0), 0.0, Inf)
-    return -rtt0
-end
-
-
-### LOG-LIKELIHOOD FUNCTIONS AND DERIVATIVES ###
-
-"""
-log-likelihood for 1 dataset for the 1-step model
-"""
-function expo_loglhood_1dset(p, times, ncell, klim0, klim1; te=nothing)
-    k, t0 = p
-    if te === nothing
-        te = times[min(klim1, length(times))]
-    end
-    if (k < 0.0) || (times[1] < t0) 
-        ll = -1e8
-    else
-        # Note that ncell includes those never activated, 
-        # whereas times only includes cells eventually activated
-        nc0 = klim0 - 1  # number of cells with t_activ = 0
-        nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
-        nc2 = ncell - nc0 - nc1
-        if nc0 > 0
-            ll = nc0 * log(expocdf([0.0], k; t0=t0)[1])
-        else
-            ll = 0.0
-        end
-        ll += sum(logexpopdf(times[klim0:klim1], k; t0=t0))
-        if nc2 > 0
-            ll += nc2 * logexpoccdf([te], k; t0=t0)[1]
-        end
-    end
-    return ll
-end
 
 
 ### RMS ERROR COMPUTATION ###
@@ -160,112 +102,7 @@ function compute_rms_all_dsets(p_all, tu_all, cumuls_all, ilim0s_all,
 end
 
 
-### MAIN FITTING FUNCTIONS ###
-
-
-"""
-Based on the highest (10 pM) concentration,
-where all cells are assumed to activate, find the fraction of tracks
-which never activate and effectively come from a distinct sub-population. 
-"""
-function normalize_topconc(concs_all, ncell_all, cumuls_all)
-    # Find dataset(s) with the highest concentration
-    maxconc = maximum(concs_all)
-    where_max = findall(x -> (x == maxconc), concs_all)
-
-    # Find the fraction of cells that never activate in them 
-    # (highest value in their cumulative fractions)
-    frac_when_maxconc = mean(collect(x[end] for x in cumuls_all[where_max]))
-
-    # For each dataset, rescale cumuls and ncell by removing
-    # the fraction of cells expected to never activate, or
-    # the actual fraction that did not activate, whichever is smallest. 
-    ncell_fix = copy(ncell_all)
-    cumuls_fix = copy(cumuls_all)
-    for i in 1:1:length(concs_all)
-        maxfrac_i = max(cumuls_all[i][end], frac_when_maxconc)
-        cumuls_fix[i] = cumuls_all[i] ./ maxfrac_i
-        ncell_fix[i] = ceil(Int, ncell_all[i] * maxfrac_i)
-    end
-    return ncell_fix, cumuls_fix
-end
-
-
-"""
-Reject inactive tracks (those with missing activation times) based on the number of cells to keep.
-Returns a filtered copy of the DataFrame, dropping columns with missing values up to the number
-of tracks that need to be dropped (total_tracks - ncells_to_keep).
-"""
-function reject_inactive_tracks(tactiv, ncells_to_keep)
-    # Find all columns that contain any missing values (inactive tracks)
-    colnames = DF.names(tactiv)
-    cols_with_missing = [col for col in colnames if any(ismissing, tactiv[:, col])]
-    
-    # Calculate how many tracks need to be dropped
-    ncell_drop = size(tactiv, 2) - ncells_to_keep
-    
-    # Drop the first ncell_drop columns with missing values
-    cols_to_drop = cols_with_missing[1:min(ncell_drop, length(cols_with_missing))]
-    
-    # Create a filtered copy without in-place modification
-    tactiv_filtered = DF.select(tactiv, DF.Not(cols_to_drop))
-    return tactiv_filtered
-end
-
-
-"""
-Prepare all cdfs with normalization, numbers of cells, limit on t0, cutoff time,
-and so on from the list of activation time DataFrames.  
-"""
-function prepare_all_cdfs(tactiv_alldsets, dsetnames, durations, cdfthresh)
-    conc_scale = 1.0  # pM
-    n_dsets = length(tactiv_alldsets)
-    concs_all = []
-    ncell_all = []
-    cumuls_all = []
-    for i in 1:1:n_dsets
-        conc = concfromstr(dsetnames[i], "pM", ' ') / conc_scale
-        # Prepare a unique list of cell number increase times to fit.
-        tactiv = tactiv_alldsets[i]
-        tu, cumul, ilim1, ncells, tlim = prepcdf(tactiv, cdfthresh, durations[i])
-        push!(cumuls_all, cumul)
-        push!(concs_all, conc)
-        push!(ncell_all, ncells)
-    end
-
-    # Adjust cell numbers based on the max conc. conditions
-    ncell_all, cumuls_all = normalize_topconc(concs_all, ncell_all, cumuls_all)
-
-    # Analyze again now that we have determined the number of tracks to reject in each
-    # dataset; this is necessary to stop at the correct cdfthresh. 
-    k0_all = []
-    k1_all = []
-    te_all = []
-    tu_all = []
-    cumuls_all = []  # Recompute. 
-    for i in 1:1:n_dsets
-        ncells = ncell_all[i]  # Corrected cell number
-        # Prepare a unique list of cell number increase times to fit.
-        tactiv = tactiv_alldsets[i]
-        tactiv_filtered = reject_inactive_tracks(tactiv, ncells)
-        tu, cumul, ilim1, ncells_2, tlim = prepcdf(tactiv_filtered, cdfthresh, durations[i])
-        if ncells_2 !== ncells
-            println("Warning: after normalization, number of cells to fit changed for dataset ", dsetnames[i])
-            println("Before: ncells = ", ncells, " , after: ncells = ", ncells_2)
-            error("See above")
-        end
-        # Find first cell with t > 0: use CDF term instead of pdf in log-likelihood
-        # for cells before that, whose activation time could be before t = 0. 
-        ilim0 = findfirst(tu .> 0.0)
-        push!(tu_all, tu)
-        push!(cumuls_all, cumul)
-        push!(k0_all, ilim0)
-        push!(k1_all, ilim1)
-        push!(te_all, tlim)
-    end
-
-    return concs_all, ncell_all, k0_all, k1_all, te_all, tu_all, cumuls_all
-end
+### FITTING FUNCTIONS ###
 
 
 function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh)
@@ -299,67 +136,7 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh)
 end
 
 
-
-
-"""
-Create a multi-panel plot comparing the empirical normalized CDFs to
-fitted exponential model curves for each dataset.
-
-Arguments:
-- cdf_prep_results: output from prepare_all_cdfs
-- nicenames: list of dataset names
-- fit_params: 2 x n_dsets array of [k; t0] per dataset
-- cdffct: exponential CDF function to plot
-- overall_rms: overall RMS error for the fit
-- durations: list of experiment durations
-"""
-function plot_ml_cdf_comparison_old(cdf_prep_results, nicenames, 
-            fit_params, cdffct, overall_rms, durations)
-    (concs_all, ncell_all, k0_all, k1_all, 
-                te_all, tu_all, cumuls_all) = cdf_prep_results
-    n_dsets = length(tu_all)
-
-    nrows = ceil(Int, sqrt(n_dsets))
-    ncols = ceil(Int, n_dsets / nrows)
-
-    p = pl.plot(layout=(nrows, ncols), size=(400*ncols, 350*nrows),
-                left_margin=3mm, right_margin=3mm, bottom_margin=3mm)
-    tplotlim = [-5.0, maximum([maximum(a) for a in tu_all]) * 1.05]
-    fracplotlim = [-0.05, 1.05]
-
-    for i in 1:n_dsets
-        tu = tu_all[i]
-        cumul = cumuls_all[i]
-        ilim1 = k1_all[i]
-
-        goodt = vcat([0.0], tu)
-        ncumul = vcat([0.0], cumul)
-
-        k = fit_params[1, i]
-        t0 = fit_params[2, i]
-        trange = collect(LinRange(0, durations[i], 100))
-        yfit = cdffct(trange, k; t0=t0)
-
-        pl.plot!(p[i], goodt, ncumul, linetype=:steppost,
-                 color=:black, linewidth=2, label="Data", alpha=0.7,
-                 legend=:bottomright, legendfontsize=8,
-                 xlim=tplotlim, ylim=fracplotlim)
-        pl.scatter!(p[i], tu, cumul, color=:black,
-                    markersize=3, label=nothing, alpha=0.5)
-        pl.plot!(p[i], trange, yfit, label="Exponential fit",
-                 color=:blue, linewidth=1.8, linestyle=:solid)
-
-        pl.xlabel!(p[i], "Time (s)", fontsize=10)
-        pl.ylabel!(p[i], "Fraction active cells", fontsize=10)
-        pl.title!(p[i], nicenames[i], fontsize=11)
-    end
-    for i in n_dsets+1:nrows * ncols
-        pl.plot!(p[i], [], [], axis=false, legend=false, grid=false)
-    end
-
-    pl.plot!(p[1], title=@sprintf("Exponential fit for %d datasets | RMS = %.3e", n_dsets, overall_rms), plot_title_fontsize=12)
-    return p
-end
+### PLOTTING FUNCTIONS ###
 
 """
 Create a single-panel plot comparing the empirical normalized CDFs to
@@ -466,41 +243,6 @@ end
 
 
 """
-Plot all empirical CDF replicates (data only, no model fit).
-Each dataset gets its own line+scatter entry, with paired colors for
-replicate datasets of the same concentration.
-"""
-function plot_replicate_cdfs(cdf_prep_results, nicenames)
-    (concs_all, ncell_all, k0_all, k1_all, 
-                te_all, tu_all, cumuls_all) = cdf_prep_results
-    n_dsets = length(tu_all)
-
-    grouped_indices, line_colors = make_paired_colors(nicenames)
-
-    tplotlim = [-5.0, maximum([maximum(tu) for tu in tu_all]) * 1.05]
-    fracplotlim = [-0.05, 1.05]
-
-    p = pl.plot(size=(900, 600), left_margin=3mm, right_margin=3mm,
-                bottom_margin=3mm, xlabel="Time (s)", ylabel="Fraction active cells",
-                xlim=tplotlim, ylim=fracplotlim, legend=:outerright, labelfont=pl.font(14),
-                tickfont=pl.font(13), legendfont=pl.font(11), legendfontsize=11,
-                title="Empirical CDF replicates", titlefontsize=14)
-
-    for i in 1:n_dsets
-        tu = tu_all[i]
-        cumul = cumuls_all[i]
-        color_i = line_colors[i]
-        pl.plot!(p, vcat([0.0], tu), vcat([0.0], cumul), linetype=:steppost,
-                 color=color_i, linewidth=3.0, label=nicenames[i], alpha=0.9)
-        pl.scatter!(p, tu, cumul, color=color_i, markersize=4,
-                    label=nothing, alpha=0.8)
-    end
-
-    return p
-end
-
-
-"""
 Plot fitted k_obs for each dataset as a function of concentration. 
 """
 function plot_kobs_vs_concentration(nicenames, fit_params, ncell_all)
@@ -581,43 +323,8 @@ function fit_ml_all_datasets(;
     if !isdir(plotdir)
         mkpath(plotdir)
     end
-    
-    # Get all CSV files from the data directory
-    fnames = vec(collect(f for f in readdir(datadir) if endswith(f, ".csv")))
-    
-    if isempty(fnames)
-        error("No CSV files found in $datadir")
-    end
-    
-    # Filter to keep only the approved list of datasets
-    # (excluding low cell count or duplicate datasets)
-    # Depending on which 4 we pick, can get very nice behavior with c or not. 
-    approved_files = [
-        "pHELD-AF594_10pM_z2.csv", 
-        "pHELD-AF594_10pM_2_z2.csv", #too sharp to claim cell activation-limited?
-        "pHELD-AF594_1pM_2.csv", 
-        #"pHELD-AF594_1pM.csv",   # low cell count, dropped dataset
-        "pHELD-AF594_0.1pM.csv",  # weird, looks like 0.01 pm
-        "pHELD-AF594_0.1pM_2.csv", 
-        "pHELD-AF594_0.01pM.csv",  #less nice fit
-        "pHELD-AF594_0.01pM_2.csv"  #nicer, no early activated cells
-    ]
-    # 0.1 pM and 0.01 pM are close to each other, closer than 0.1 pM and 0.1 pM 2...
-    # 10 pM 2 makes k vs conc look linear. 
-    fnames = collect(fp for fp in fnames if fp in approved_files)
-    fpaths = collect(joinpath(datadir, f) for f in fnames)
 
-    # Sort names in decreasing concentration order
-    # Extract concentration of each name
-    shortnames, lblconcs = cleannames(fnames)
-    sortidx = reverse(sortperm(lblconcs), dims=1)
-    shortnames = shortnames[sortidx]
-    fnames = fnames[sortidx]
-    fpaths = fpaths[sortidx]
-    
-    if isempty(fpaths)
-        error("No approved CSV files found in $datadir")
-    end
+    fnames, fpaths = get_csv_file_names(datadir)
 
     println("\n" * "="^70)
     println("MAXIMUM LIKELIHOOD FITTING - JR064 DATASETS")
@@ -693,11 +400,6 @@ function fit_ml_all_datasets(;
     p_repl = plot_kobs_replicates_loglog(nicenames, fit_params)
     plot_file = joinpath(plotdir, "exp_kobs_replicates_loglog.pdf")
     pl.savefig(p_repl, plot_file)
-    println("  Saved: $plot_file")
-
-    p_data = plot_replicate_cdfs(prep_cdf_res, nicenames)
-    plot_file = joinpath(plotdir, "all_empirical_cdfs.pdf")
-    pl.savefig(p_data, plot_file)
     println("  Saved: $plot_file")
 
     println("\n" * "="^70)

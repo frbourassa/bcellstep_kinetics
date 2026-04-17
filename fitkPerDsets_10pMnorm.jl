@@ -36,8 +36,8 @@ using LinearAlgebra: UniformScaling, diag, diagm, svd
 module tracksAnalysis
     include("analysis/tracks.jl")
 end
-using .tracksAnalysis: prepalldsets, prepcdf, concfromstr, cleannames, 
-    loadalldsets, threshalldsets
+using .tracksAnalysis: prepalldsets, concfromstr, cleannames, 
+    loadalldsets, threshalldsets, prepare_all_cdfs, get_csv_file_names
 
 module modelsML
     include("analysis/modelsML.jl")
@@ -117,109 +117,6 @@ end
 
 ### MAIN FITTING FUNCTIONS ###
 
-"""
-Based on the highest (10 pM) concentration,
-where all cells are assumed to activate, find the fraction of tracks
-which never activate and effectively come from a distinct sub-population. 
-"""
-function normalize_topconc(concs_all, ncell_all, cumuls_all)
-    # Find dataset(s) with the highest concentration
-    maxconc = maximum(concs_all)
-    where_max = findall(x -> (x == maxconc), concs_all)
-
-    # Find the fraction of cells that never activate in them 
-    # (highest value in their cumulative fractions)
-    frac_when_maxconc = mean(collect(x[end] for x in cumuls_all[where_max]))
-
-    # For each dataset, rescale cumuls and ncell by removing
-    # the fraction of cells expected to never activate, or
-    # the actual fraction that did not activate, whichever is smallest. 
-    ncell_fix = copy(ncell_all)
-    cumuls_fix = copy(cumuls_all)
-    for i in 1:1:length(concs_all)
-        maxfrac_i = max(cumuls_all[i][end], frac_when_maxconc)
-        cumuls_fix[i] = cumuls_all[i] ./ maxfrac_i
-        ncell_fix[i] = ceil(Int, ncell_all[i] * maxfrac_i)
-    end
-    return ncell_fix, cumuls_fix
-end
-
-
-"""
-Reject inactive tracks (those with missing activation times) based on the number of cells to keep.
-Returns a filtered copy of the DataFrame, dropping columns with missing values up to the number
-of tracks that need to be dropped (total_tracks - ncells_to_keep).
-"""
-function reject_inactive_tracks(tactiv, ncells_to_keep)
-    # Find all columns that contain any missing values (inactive tracks)
-    colnames = DF.names(tactiv)
-    cols_with_missing = [col for col in colnames if any(ismissing, tactiv[:, col])]
-    
-    # Calculate how many tracks need to be dropped
-    ncell_drop = size(tactiv, 2) - ncells_to_keep
-    
-    # Drop the first ncell_drop columns with missing values
-    cols_to_drop = cols_with_missing[1:min(ncell_drop, length(cols_with_missing))]
-    
-    # Create a filtered copy without in-place modification
-    tactiv_filtered = DF.select(tactiv, DF.Not(cols_to_drop))
-    return tactiv_filtered
-end
-
-
-"""
-Prepare all cdfs with normalization, numbers of cells, limit on t0, cutoff time,
-and so on from the list of activation time DataFrames.  
-"""
-function prepare_all_cdfs(tactiv_alldsets, dsetnames, durations, cdfthresh)
-    n_dsets = length(tactiv_alldsets)
-    concs_all = []
-    ncell_all = []
-    cumuls_all = []
-    for i in 1:1:n_dsets
-        conc = concfromstr(dsetnames[i], "pM", ' ') / conc_scale
-        # Prepare a unique list of cell number increase times to fit.
-        tactiv = tactiv_alldsets[i]
-        tu, cumul, ilim1, ncells, tlim = prepcdf(tactiv, cdfthresh, durations[i])
-        push!(cumuls_all, cumul)
-        push!(concs_all, conc)
-        push!(ncell_all, ncells)
-    end
-
-    # Adjust cell numbers based on the max conc. conditions
-    ncell_all, cumuls_all = normalize_topconc(concs_all, ncell_all, cumuls_all)
-
-    # Analyze again now that we have determined the number of tracks to reject in each
-    # dataset; this is necessary to stop at the correct cdfthresh. 
-    k0_all = []
-    k1_all = []
-    te_all = []
-    tu_all = []
-    cumuls_all = []  # Recompute. 
-    for i in 1:1:n_dsets
-        ncells = ncell_all[i]  # Corrected cell number
-        # Prepare a unique list of cell number increase times to fit.
-        tactiv = tactiv_alldsets[i]
-        tactiv_filtered = reject_inactive_tracks(tactiv, ncells)
-        tu, cumul, ilim1, ncells_2, tlim = prepcdf(tactiv_filtered, cdfthresh, durations[i])
-        if ncells_2 !== ncells
-            println("Warning: after normalization, number of cells to fit changed for dataset ", dsetnames[i])
-            println("Before: ncells = ", ncells, " , after: ncells = ", ncells_2)
-            error("See above")
-        end
-        # Find first cell with t > 0: use CDF term instead of pdf in log-likelihood
-        # for cells before that, whose activation time could be before t = 0. 
-        ilim0 = findfirst(tu .> 0.0)
-        push!(tu_all, tu)
-        push!(cumuls_all, cumul)
-        push!(k0_all, ilim0)
-        push!(k1_all, ilim1)
-        push!(te_all, tlim)
-    end
-
-    return concs_all, ncell_all, k0_all, k1_all, te_all, tu_all, cumuls_all
-end
-
 
 function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdffct)
     # kappa estimate: diffusion-limited, 0.4 pM^-1 s^-1, 
@@ -295,93 +192,6 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh, loglfct, cdf
     result = Array{Float64}(vcat(fit_params, [rmserr]))
 
     return result, rms_per_dset
-end
-
-
-
-
-"""
-Plot a single dataset's empirical CDF with both model fits overlaid.
-
-Arguments:
-- tactiv: activation times for this dataset
-- name: dataset name for title
-- duration: length of imaging experiment
-- cdfthresh: CDF threshold used for fitting
-- kappa1, k2_1, t0_1: parameters for one-hit model
-- kappa2, k2_2, t0_2: parameters for two-hit model
-- kappa3, k2_3, t0_3: parameters for three-hit model
-- conc: concentration for this dataset
-- cdffct1, cdffct2, cdffct3: CDF functions for the three models
-"""
-function plot_single_dataset_cdf(cdf_prep_results_one, name, duration, cdfthresh,
-                                  kappa1, k2_1, t0_1,
-                                  kappa2, k2_2, t0_2,
-                                  kappa3, k2_3, t0_3,
-                                  cdffct1, cdffct2, cdffct3)
-    # Print info to trace back issues
-    println("For dataset:", name)
-    println("Duration:", duration)
-    println("cdfthresh:", cdfthresh)
-    println("kappa1:", kappa1)
-    println("k2_1:", k2_1)
-    println("t0_1:", t0_1)
-    println("kappa2:", kappa2)
-    println("k2_2:", k2_2)
-    println("t0_2:", t0_2)
-    println("kappa3:", kappa3)
-    println("k2_3:", k2_3)
-    println("t0_3:", t0_3)
-
-    # Prepare empirical CDF
-    conc, ncells, ilim0, ilim1, tlim, tu, cumul = cdf_prep_results_one
-    println("Number of activ times:", length(tu))
-    println("ncells:", ncells)
-    println("tlim:", tlim)
-    println("Concentration:", conc)
-    
-    # Scale CDF for plotting
-    goodt = vcat([0], tu)
-    ncumul = vcat([0], cumul .* ncells)
-    
-    # Create plot
-    p = pl.plot(size=(600, 500), legend=:topleft, 
-                left_margin=3mm, right_margin=3mm, bottom_margin=3mm)
-    
-    # Plot empirical CDF as step function
-    pl.plot!(p, goodt, ncumul, linetype=:steppost, 
-             color=:black, linewidth=2.5, label="Data", alpha=0.8)
-    
-    # Add markers at data points
-    pl.scatter!(p, tu, cumul .* ncells, color=:black, 
-                markersize=4, label=nothing, alpha=0.6)
-    
-    # Generate smooth curves for model fits over the fitting range
-    trange = collect(LinRange(0, tu[end], 150))
-    
-    # One-hit model
-    cdf1 = cdffct1(trange, conc, kappa1, k2_1; t0=t0_1)
-    y1 = cdf1 .* ncells
-    pl.plot!(p, trange, y1, label="1-hit model", 
-             color=:blue, linewidth=2, linestyle=:solid)
-    
-    # Two-hit model
-    cdf2 = cdffct2(trange, conc, kappa2, k2_2; t0=t0_2)
-    y2 = cdf2 .* ncells
-    pl.plot!(p, trange, y2, label="2-hit model", 
-             color=:red, linewidth=2, linestyle=:dash)
-
-    # Three-hit model
-    cdf3 = cdffct3(trange, conc, kappa3, k2_3; t0=t0_3)
-    y3 = cdf3 .* ncells
-    pl.plot!(p, trange, y3, label="3-hit model", 
-             color=:purple, linewidth=2, linestyle=:dot)
-    
-    pl.xlabel!(p, "Time (s)", fontsize=12)
-    pl.ylabel!(p, "Number of activated cells", fontsize=12)
-    pl.title!(p, name, fontsize=13)
-    
-    return p
 end
 
 
@@ -480,125 +290,6 @@ function plot_ml_cdf_comparison(cdf_prep_results, nicenames,
     
     return p
 end
-
-
-"""
-Plot model curves across concentrations for 1-hit, 2-hit, and 3-hit models.
-Selects the dataset with the most cells for each concentration and plots
-its model curves. Uses magma colormap for concentration-dependent coloring.
-"""
-function plot_models_vs_concentration(nicenames, ncell_all, onehit_params, twohit_params, threehit_params,
-                                       onehit_cdf, twohit_cdf, threehit_cdf, durations)
-    
-    # Extract concentrations and group by concentration
-    nicenames, lblconcs = cleannames(nicenames)
-    unique_concs = unique(sort(lblconcs))
-    
-    # For each unique concentration, find dataset with most cells
-    selected_indices = []
-    for conc in unique_concs
-        indices_for_conc = findall(c -> c ≈ conc, lblconcs)
-        cells_for_conc = [ncell_all[i] for i in indices_for_conc]
-        max_idx_in_group = argmax(cells_for_conc)
-        push!(selected_indices, indices_for_conc[max_idx_in_group])
-    end
-    
-    # Create plot
-    p = pl.plot(size=(800, 600), xlabel="Time (s)", ylabel="Fraction of activated cells",
-                legend=:bottomright, left_margin=3mm, right_margin=3mm, bottom_margin=3mm, 
-                ylim=[-0.02, 1.05])
-    
-    # Get time range for plotting
-    max_duration = maximum(durations)
-    trange = collect(LinRange(0, max_duration, 200))
-    
-    # Use magma colormap
-    cmap = pl.cgrad(:magma)
-    
-    # Plot curves for each concentration
-    for (idx_in_unique, dset_idx) in enumerate(selected_indices)
-        # Normalize color to [0,1] range
-        color_val = (idx_in_unique - 1) / max(1, length(unique_concs))
-        color = cmap[color_val]
-        
-        conc = lblconcs[dset_idx]
-        kappa_1 = onehit_params[1 + dset_idx]
-        k2_1 = onehit_params[1]
-        t0_1 = 0.0
-        
-        kappa_2 = twohit_params[1 + dset_idx]
-        k2_2 = twohit_params[1]
-        t0_2 = 0.0
-        
-        kappa_3 = threehit_params[1 + dset_idx]
-        k2_3 = threehit_params[1]
-        t0_3 = 0.0
-        
-        # Compute CDFs
-        cdf1 = onehit_cdf(trange, conc, kappa_1, k2_1; t0=t0_1)
-        cdf2 = twohit_cdf(trange, conc, kappa_2, k2_2; t0=t0_2)
-        cdf3 = threehit_cdf(trange, conc, kappa_3, k2_3; t0=t0_3)
-        
-        # Plot 1-hit model
-        label_1hit = @sprintf "1-hit: %.2g pM" conc
-        pl.plot!(p, trange, cdf1, label=label_1hit, linestyle=:solid,
-                linewidth=2.5, color=color, alpha=1.0)
-        
-        # Plot 2-hit model
-        label_2hit = @sprintf "2-hit: %.2g pM" conc
-        pl.plot!(p, trange, cdf2, label=label_2hit, linestyle=:dash,
-                linewidth=2.5, color=color, alpha=1.0)
-
-        # Plot 3-hit model
-        label_3hit = @sprintf "3-hit: %.2g pM" conc
-        pl.plot!(p, trange, cdf3, label=label_3hit, linestyle=:dot,
-                linewidth=2.5, color=:purple, alpha=1.0)
-    end
-    
-    pl.title!(p, "Model predictions: 1-hit vs 2-hit (color = concentration)", fontsize=12)
-    
-    return p
-end
-
-
-function get_csv_file_names(datadir)
-        # Get all CSV files from the data directory
-    fnames = vec(collect(f for f in readdir(datadir) if endswith(f, ".csv")))
-    
-    if isempty(fnames)
-        error("No CSV files found in $datadir")
-    end
-    
-    # Filter to keep only the approved list of datasets
-    # (excluding low cell count or duplicate datasets)
-    approved_files = [
-        "pHELD-AF594_10pM_z2.csv", 
-        "pHELD-AF594_10pM_2_z2.csv", 
-        "pHELD-AF594_1pM_2.csv", 
-        #"pHELD-AF594_1pM.csv",   # low cell count, dropped dataset
-        "pHELD-AF594_0.1pM.csv",
-        "pHELD-AF594_0.1pM_2.csv", 
-        "pHELD-AF594_0.01pM.csv", 
-        "pHELD-AF594_0.01pM_2.csv"
-    ]
-    fnames = collect(fp for fp in fnames if fp in approved_files)
-    fpaths = collect(joinpath(datadir, f) for f in fnames)
-    
-    if isempty(fpaths)
-        error("No approved CSV files found in $datadir")
-    end
-
-    # Sort names in decreasing concentration order
-    # Extract concentration of each name
-    shortnames, lblconcs = cleannames(fnames)
-    sortidx = reverse(sortperm(lblconcs), dims=1)
-    shortnames = shortnames[sortidx]
-    fnames = fnames[sortidx]
-    fpaths = fpaths[sortidx]
-
-    return fnames, fpaths
-end
-
 
 
 ### MAIN ANALYSIS FUNCTION ###
@@ -737,32 +428,6 @@ function fit_ml_all_datasets(;
     pl.savefig(p_all, plot_file)
     println("  Saved: $plot_file")
 
-    # Plot: Individual dataset panels
-    for i in 1:n_dsets
-        prep_cdf_i = [prep_cdf_res[j][i] for j in eachindex(prep_cdf_res)]
-        k2_1, kappa_1, t0_1 = onehit_params[1], onehit_params[1+i], onehit_params[1+n_dsets+i]
-        k2_2, kappa_2, t0_2 = twohit_params[1], twohit_params[1+i], twohit_params[1+n_dsets+i]
-        k2_3, kappa_3, t0_3 = threehit_params[1], threehit_params[1+i], threehit_params[1+n_dsets+i]
-        p_single = plot_single_dataset_cdf(
-            prep_cdf_i, nicenames[i], durations[i], cdfthresh,
-            kappa_1, k2_1, t0_1,
-            kappa_2, k2_2, t0_2,
-            kappa_3, k2_3, t0_3,
-            onehit_cdf, twohit_cdf, threehit_cdf
-        )
-        plot_file = joinpath(plotdir, "ml_cdf_dataset_$(i)_$(nicenames[i]).pdf")
-        pl.savefig(p_single, plot_file)
-        println("  Saved: $plot_file")
-    end
-    
-    # Plot: Model curves versus concentration
-    ncell_all = prep_cdf_res[2]  # Extract ncell_all from the prepared results
-    p_conc = plot_models_vs_concentration(fnames, ncell_all, onehit_params, twohit_params, threehit_params,
-                                           onehit_cdf, twohit_cdf, threehit_cdf, durations)
-    plot_file = joinpath(plotdir, "ml_models_vs_concentration.pdf")
-    pl.savefig(p_conc, plot_file)
-    println("  Saved: $plot_file")
-
     println("\n" * "="^70)
     println("Analysis complete!")
     println("="^70 * "\n")
@@ -869,7 +534,7 @@ end
 
 # Run the analysis
 function (@main)(_)
-    #fit_ml_all_datasets(fracabove=0.8, cdfthresh=0.75)
+    fit_ml_all_datasets(fracabove=0.8, cdfthresh=0.75)
     robustness_vs_thresh_main(fracabove_default=0.8, cdfthresh=0.75)
     return 0
 end
