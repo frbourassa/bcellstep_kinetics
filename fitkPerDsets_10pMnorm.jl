@@ -307,8 +307,7 @@ function threehit_pdf(t::Array, conc::Float64,
     exptt0 = exp.(-kc .* tt0)
     pdf = (0.5 / (k2 - kc)) .* tt0.*tt0 .* exptt0
     pdf .-= (tt0 .* exptt0) ./ (kc - k2)^2 
-    pdf .-= exptt0 ./ (kc - k2)^3 
-    pdf .+= exp.(-k2 .* tt0) ./ (kc - k2)^3
+    pdf .+= (exptt0 .- exp.(-k2 .* tt0)) ./ (kc - k2)^3 
     pdf .*= (kc^3 * k2)
     return pdf
 end
