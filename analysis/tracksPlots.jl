@@ -103,7 +103,7 @@ function plot_trajs_activ_cdf(dfi, activtimes, activfluo, thresh, backgnd,
     pl.annotate!(p, tn*1.05, thresh-0.32*thresh, ("Inactive", :left, :bottom, 10))
 
     pl.xlabel!(p, "Time (s)")
-    pl.ylabel!(p, raw"Ca2+ fluorescence (a.u.)")
+    pl.ylabel!(p, "Calcium fluorescence (a.u.)")
 
     # Title the panel
     if conclbl !== nothing
@@ -249,46 +249,6 @@ function plottimescdffit!(ppinfo, tactiv, cdfparams, quadparams, pms3;
     return p1
 end
 
-"""
-Plot all acquired CDFs, two per VLP concentration. Assume datasets are already sorted.
-"""
-function plotallcdfs(p, alltactivs, shortnames, all_cdfparams)
-
-    # Define a color scheme increasing with concentration
-    #linecolors = pl.palette([:purple, :green], length(shortnames))
-    linecolors = pl.cgrad(:thermal, length(shortnames), rev = true, categorical = true)
-
-    # Single out the duplicates
-    pl.plot!(p, legend_title="pHELD-AF594")
-    for i in 1:1:length(alltactivs)
-        lbl = shortnames[i]
-        tactiv = alltactivs[i]
-        tu, cumul, _, ncells = prepcdf(tactiv, 1.0)
-        #println("For $lbl, found $ncells cells")
-        # Prepend 0 for plotting
-        goodt = vcat([0], tu)
-        cumul = vcat([0], cumul)
-        p = pl.plot!(p, goodt, cumul, linetype=:steppost, 
-            label=lbl, color=linecolors[i], marker=(:circle, 3),
-            markerstrokewidth=0.0)
-
-        # Also plot the fitted straight line
-        cdfparams = all_cdfparams[i]
-        slope, _, tlim, _, t0, _ = cdfparams
-        trange = collect(LinRange(minimum(goodt), tlim, 20))
-        yrange = expocdf(trange, slope; t0=t0)
-
-        lbl = @sprintf "%.1f" slope
-        lbl = lbl *  raw"s$^{-1}$"
-        lbl = raw"$\kappa v =$ " * lbl
-        p = pl.plot!(p, trange, yrange, label=nothing, color=linecolors[i], lw=2.0)
-        #pl.annotate!(p, trange[end], yrange[end], (lbl, 8, linecolors[i], :bottom))
-    end
-    pl.xlabel!(p, "Time (s)")
-    pl.ylabel!(p, raw"Fraction activated cells")
-    return p
-end
-
 
 """
 Function making plots for the plot showing vs against fluorescence threshold. 
@@ -368,7 +328,7 @@ function plotrobustness(fits123, rms123, allnames,
     good_frac_range = [0.25, 1.2]
     pl.vspan!(p_kappa, good_frac_range.+1.0, color=:grey, alpha=0.3, label=nothing)
     pl.vspan!(p_t0, good_frac_range.+1.0, color=:grey, alpha=0.3, label=nothing)
-    pl.annotate!(p_kappa, 1.63, maximum(fits3[:, kappa_indices]), 
+    pl.annotate!(p_kappa, 1.43, maximum(fits3[:, kappa_indices])*0.9, 
         ("Optimal region", 10, :grey, :bottom, :left))
 
     # Final plots: RMS error of linear vs quadratic fits
@@ -382,7 +342,7 @@ function plotrobustness(fits123, rms123, allnames,
     # already active, which is typically factor <= 0.4
     mask = (good_frac_range[1] .<= fracrange .<= good_frac_range[2])
     npoints = length(fracrange)
-    skp = div(npoints, 15)
+    skp = 2
     rms1_sel = rms1_sel[mask, :][1:skp:end, :]
     rms2_sel = rms2_sel[mask, :][1:skp:end, :]
     rms3_sel = rms3_sel[mask, :][1:skp:end, :]
@@ -392,7 +352,8 @@ function plotrobustness(fits123, rms123, allnames,
     rms3_sel = cliprms!(rms3_sel)
 
     msmin, msmax = 3.0, 7.0
-    msizes = collect(LinRange(msmin, msmax, length(fracrange)))
+    npts = size(rms1_sel)[1]
+    msizes = collect(LinRange(msmin, msmax, npts))
 
     ## Plot of one-hit vs two-hit RMS error
     pp2 = pl.plot(layout=(1, 1), size=(450, 450), bottom_margin=2mm,
@@ -438,7 +399,6 @@ function plotrobustness(fits123, rms123, allnames,
     end
 
     # Add custom legend
-    npts = length(fracrange)
     ms_inter = collect(LinRange(msmin, msmax, npts))[div(npts, 2)]
     frac_inter = fracrange[div(npts, 2)]
     ms_selection = [msmin, ms_inter, msmax]

@@ -41,7 +41,7 @@ module modelsML
     include("analysis/modelsML.jl")
 end
 using .modelsML: expocdf, expopdf, expoccdf, logexpoccdf, logexpopdf, 
-    expo_loglhood_1dset
+    expo_loglhood_1dset, hess_minuslogl_expo!, deriv_minuslogl_expo!
 
 
 pl.default(fontfamily="Arial")
@@ -113,28 +113,49 @@ function fitmodel(tactiv_alldsets, dsetnames, durations, cdfthresh)
     concs_all, ncell_all, k0_all, k1_all, te_all, tu_all, cumuls_all = prepres
 
     fit_params = zeros(Float64, 2, n_dsets)
+    fit_params_errors = zeros(Float64, 2, n_dsets)
     for i in 1:n_dsets
         lower = [1e-6, -20.0]
-        upper = [10.0, te_all[i]-1e-3]
+        upper = [10.0, tu_all[i][1]-1e-3]
         init_p = [0.1, -0.1]
 
         klim0 = isnothing(k0_all[i]) ? 1 : k0_all[i]
         klim1 = k1_all[i]
         te = te_all[i]
 
-        cost = p -> -expo_loglhood_1dset(p, tu_all[i], ncell_all[i], klim0, klim1; te=te)
+        cost = p -> -expo_loglhood_1dset(p, 
+                            tu_all[i], ncell_all[i], klim0, klim1; te=te)
+        minusgrad! = (g, p) -> deriv_minuslogl_expo!(g, p, 
+                                tu_all[i], ncell_all[i], klim0, klim1; te=te)
+        minushess! = (h, p) -> hess_minuslogl_expo!(h, p, 
+                                tu_all[i], ncell_all[i], klim0, klim1; te=te)
         inner_optimizer = IPNewton()
-        results = optimize(cost, lower, upper, init_p, inner_optimizer)
+        results = optimize(cost, minusgrad!, minushess!, 
+                            lower, upper, init_p, inner_optimizer)
 
         if !Optim.converged(results)
             println("Dataset $(dsetnames[i]) did not converge for cdfthresh = $cdfthresh")
         end
-        fit_params[:, i] = Optim.minimizer(results)
+        params = Optim.minimizer(results)
+        fit_params[:, i] = params
+
+        # Get variance of these parameter fits. Hessian is not positive definite
+        # because the likelihood is monotonically increasing with t0, 
+        # so best fit is t0 = boundary, k* derived from dlogL/dk = 0
+        # So the uncertainty on the slope is estimated by inverting the FIM = -hessian^-1 element, 
+        # while that on t0 is the uncertainty on an experimental time
+        # so let's say (0.5 * time bin)^2. 
+        minushessmat = zeros(2, 2)
+        minushess!(minushessmat, params)
+        varislope = 1.0 / minushessmat[1, 1]
+        varit0 = (0.5 * (tu_all[i][2] - tu_all[i][1]))^2
+        fit_params_errors[:, i] = [sqrt(varislope), sqrt(varit0)]
+
     end
 
     rms_errors, overall_rms = compute_rms_all_dsets(fit_params, 
                                 tu_all, cumuls_all, k0_all, k1_all, expocdf)
-    return fit_params, rms_errors, overall_rms, prepres
+    return fit_params, fit_params_errors, rms_errors, overall_rms, prepres
 end
 
 
@@ -247,7 +268,7 @@ end
 """
 Plot fitted k_obs for each dataset as a function of concentration. 
 """
-function plot_kobs_vs_concentration(nicenames, fit_params, ncell_all)
+function plot_kobs_vs_concentration(nicenames, fit_params, fit_errors, ncell_all)
     lblconcs = [concfromstr(name, "pM", ' ') for name in nicenames]
     valid = findall(x -> x !== nothing, lblconcs)
     if length(valid) != length(lblconcs)
@@ -265,8 +286,9 @@ function plot_kobs_vs_concentration(nicenames, fit_params, ncell_all)
 
     selected_concs = [lblconcs[i] for i in selected_indices]
     fitted_ks = [fit_params[1, i] for i in selected_indices]
+    fit_ks_errs = [fit_errors[1, i] for i in selected_indices]
 
-    p = pl.plot(selected_concs, fitted_ks, marker=:circle, markersize=7,
+    p = pl.plot(selected_concs, fitted_ks, yerr=fit_ks_errs, marker=:circle, markersize=7,
                 linewidth=2, xlabel="Concentration (pM)", ylabel="Fitted rate k (s^-1)",
                 legend=false, left_margin=3mm, right_margin=3mm, bottom_margin=3mm)
     pl.plot!(selected_concs, fitted_ks, linestyle=:solid, color=:blue)
@@ -347,7 +369,7 @@ function fit_ml_all_datasets(;
     println("Fitting exponential model for each dataset separately...")
     println("-"^70)
     fitres = fitmodel(tactiv_alldsets, nicenames, durations, cdfthresh)
-    fit_params, rms_errors, overall_rms, prep_cdf_res = fitres
+    fit_params, fit_errors, rms_errors, overall_rms, prep_cdf_res = fitres
 
     println("\nExponential fit results:")
     for i in 1:n_dsets
@@ -375,6 +397,7 @@ function fit_ml_all_datasets(;
     selected_durations = durations[selected_indices]
     selected_names = nicenames[selected_indices]
     selected_fit_params = fit_params[:, selected_indices]
+    selected_fit_errors = fit_errors[:, selected_indices]
 
     println("\nSelected $(length(selected_indices)) datasets for plotting:")
     for (j, name) in enumerate(selected_names)
@@ -394,7 +417,8 @@ function fit_ml_all_datasets(;
     pl.savefig(p_all, plot_file)
     println("  Saved: $plot_file")
 
-    p_conc = plot_kobs_vs_concentration(selected_names, selected_fit_params, prep_cdf_res[2])
+    p_conc = plot_kobs_vs_concentration(selected_names, 
+                selected_fit_params, selected_fit_errors, prep_cdf_res[2])
     plot_file = joinpath(plotdir, "exp_k_vs_concentration_$(sind).pdf")
     pl.savefig(p_conc, plot_file)
     println("  Saved: $plot_file")

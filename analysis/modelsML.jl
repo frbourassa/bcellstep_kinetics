@@ -76,6 +76,53 @@ function expo_loglhood_1dset(p, times, ncell, klim0, klim1; te=nothing)
 end
 
 
+### Gradient and hessian of the log-likelihood, for covariance calculation
+function deriv_minuslogl_expo!(dp, p, times, ncell, klim0, klim1; te=nothing)
+    k, t0 = p
+    nc0 = klim0 - 1  # number of cells with t_activ = 0
+    nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
+    nc2 = ncell - nc0 - nc1
+    if te === nothing
+        te = times[min(klim1, length(times))]
+    end
+    expkt0 = exp(k*t0)
+    if nc0 > 0
+        common = nc0 * expkt0 / (1.0 - expkt0)
+    else
+        common = 0.0 
+    end
+    dp[1] = -nc1 / k + nc2 * (te - t0)
+    dp[1] += common * t0
+    dp[2] = -(ncell - nc0) * k + common * k
+    for nn in klim0:1:klim1
+        dp[1] += (times[nn] - t0)
+    end
+    return dp
+end
+
+
+function hess_minuslogl_expo!(mat, p, times, ncell, klim0, klim1; te=nothing)
+    k, t0 = p
+    nc0 = klim0 - 1  # number of cells with t_activ = 0
+    nc1 = klim1 - nc0  # number of cells with 0 < t_activ < tlim
+    nc2 = ncell - nc0 - nc1
+    if te === nothing
+        te = times[min(klim1, length(times))]
+    end
+    expkt0 = exp(k*t0)
+    if nc0 > 0
+        common = nc0 * expkt0 / (1.0 - expkt0)^2
+    else
+        common = 0.0
+    end
+    mat[1, 1] = nc1 / k^2 + common * t0*t0
+    mat[1, 2] = -(ncell - nc0) - common * (expkt0 - k*t0 - 1.0)
+    mat[2, 1] = mat[1, 2]
+    mat[2, 2] = common * k*k
+    return mat
+end
+
+
 
 ### ONE-HIT MODEL ###
 
