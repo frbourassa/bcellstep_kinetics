@@ -258,7 +258,8 @@ end
 """
 Apply findactivtimes_thresh to a list of datasets, return the list of activation times and durations
 """
-function prepalldsets(fpaths; ch="MEAN_INTENSITY_CH2", filterpms=[50, 30.0], fracabove=0.5, disp=true)
+function prepalldsets(fpaths; ch="MEAN_INTENSITY_CH2", 
+        filterpms=[50, 30.0], fracabove=0.5, disp=true)
     tactiv_alldsets = []
     durations_alldsets = []
     for fpath in fpaths

@@ -20,20 +20,17 @@ This script:
 François X. P. Bourassa, 2026
 =#
 
-using DataFrames: DataFrames as DF
 using Plots: Plots as pl
 using Printf: @sprintf
-using Statistics: mean
 using Measures: mm
 using Optim: Optim, optimize, IPNewton
-using LinearAlgebra: UniformScaling, diag, diagm, svd
 
 
 # Load the data processing module
 module tracksAnalysis
     include("analysis/tracks.jl")
 end
-using .tracksAnalysis: prepalldsets, concfromstr, cleannames, 
+using .tracksAnalysis: prepalldsets, concfromstr,
     prepare_all_cdfs, get_csv_file_names
 
 
@@ -51,7 +48,7 @@ pl.default(fontfamily="Arial")
 
 """
 Compute the root-mean-squared error of the fitted cumulative distribution 
-function for each dataset TODO
+function for each dataset
 
 Arguments:
 - p_all: fitted parameters array, shape [2, n_datasets]
@@ -340,8 +337,8 @@ end
 function fit_ml_all_datasets(; 
     datadir="data/JR064_tracks",
     plotdir="figures/ml_fits_kobs_10pMnorm/",
-    fracabove=0.6,
-    cdfthresh=0.5)
+    fracabove=0.8,
+    cdfthresh=0.75)
     
     # Create output directory if it doesn't exist
     if !isdir(plotdir)

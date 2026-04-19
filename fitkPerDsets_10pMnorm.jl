@@ -22,12 +22,10 @@ This script:
 François X. P. Bourassa, 2026
 =#
 
-using DataFrames: DataFrames as DF
 using Plots: Plots as pl
 using Printf: @sprintf
 using Measures: mm
 using Optim: Optim, optimize, IPNewton
-using LinearAlgebra: UniformScaling, diag, diagm, svd
 
 pl.default(fontfamily="Arial")
 
@@ -36,7 +34,7 @@ pl.default(fontfamily="Arial")
 module tracksAnalysis
     include("analysis/tracks.jl")
 end
-using .tracksAnalysis: prepalldsets, concfromstr, cleannames, 
+using .tracksAnalysis: prepalldsets, 
     loadalldsets, threshalldsets, prepare_all_cdfs, get_csv_file_names
 
 module modelsML
@@ -50,8 +48,6 @@ module tracksPlots
     include("analysis/tracksPlots.jl")
 end
 using .tracksPlots: plotrobustness
-
-conc_scale = 1.0  # pM
 
 
 ### RMS ERROR COMPUTATION ###
@@ -215,8 +211,6 @@ function plot_ml_cdf_comparison(cdf_prep_results, nicenames,
     tplotlim = [-5.0, maximum([maximum(a) for a in tu_all]) * 1.05]
     fracplotlim = [-0.05, 1.05]
     for i in 1:n_dsets
-        # Extract concentration
-        conc = concfromstr(nicenames[i], "pM", ' ') / conc_scale
         
         tu = tu_all[i]
         cumul = cumuls_all[i]
