@@ -1,4 +1,8 @@
-""" Functions to load and preprocess microscopy tracks data """
+#=
+Functions to load and preprocess microscopy tracks data
+
+François X. P. Bourassa, 2026
+=#
 
 using DataFrames: DataFrames as DF  # all methods available as DF.method
 using CSV: CSV  # all methods available as CSV.method
@@ -220,7 +224,7 @@ end
 Function to apply findjump_thresh to each trajectory in the DataFrame of tracks
 Also returns movie duration. 
 """
-function findactivtimes_thresh(dfc; fracabove=0.5, disp=true)  
+function findactivtimes_thresh(dfc; fracabove=0.8, disp=true)  
     if disp
         display(DF.last(dfc[1:end, 1:10], 10))
     end
@@ -259,7 +263,7 @@ end
 Apply findactivtimes_thresh to a list of datasets, return the list of activation times and durations
 """
 function prepalldsets(fpaths; ch="MEAN_INTENSITY_CH2", 
-        filterpms=[50, 30.0], fracabove=0.5, disp=true)
+        filterpms=[50, 30.0], fracabove=0.8, disp=true)
     tactiv_alldsets = []
     durations_alldsets = []
     for fpath in fpaths
@@ -367,7 +371,7 @@ function prepcdf(tactiv, cdfthresh, duration)
 
     # 3. Get the upper limit of the early time, up to F_T(t) = cdfthresh
     # For cases with very few points (because activ threshold is large) 
-    # or all points being activated immediately (so 1-2 points before cdf=0.5)
+    # or all points being activated immediately, 
     # fit to all available points minus one
     ilim = findfirst(x -> (x !== missing && x >= cdfthresh), cumul)
     cdfthresh2 = cdfthresh
