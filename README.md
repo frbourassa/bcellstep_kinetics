@@ -4,7 +4,7 @@ Code to analyze B cell calcium imaging microscopy tracks in terms of the cumulat
 
 >> 
 
-See the Methods section for a technical description of the mathematical analysis and maximum likelihood fitting of cumulative distribution functions corresponding to the different models. 
+See the Methods section for a technical description of the mathematical models of cell activation time distributions and their estimation by maximum likelihood. 
 
 ## Code structure
 The Jupyter notebook `finalPlotsTracks.ipynb` runs the overall analysis and produces the figure panels using the modules in `utils/`. 
