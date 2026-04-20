@@ -28,4 +28,10 @@ This code was run using Julia version 1.12.2 and requires installation of the fo
 
 
 ## Authors
-François X. P. Bourassa, 2026
+François X. P. Bourassa, 2026, and all authors of the manuscript. 
+
+## License
+CC-BY-SA-4.0
+
+## Zenodo badge
+[![DOI](https://zenodo.org/badge/1208515872.svg)](https://doi.org/10.5281/zenodo.19657273)
