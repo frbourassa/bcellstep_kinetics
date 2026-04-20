@@ -36,6 +36,8 @@ function cleannames(namelist)
     shortnames = collect(join(split(x, ".")[1:end-1], ".") for x in shortnames)
     shortnames = collect(map(x -> replace(x, " z2" => ""), shortnames))
     lblconcs = collect(concfromstr(x, "pM", " ") for x in shortnames)  # in pM
+    # We rejected 1 pM replicate 1, so rename replicate 2
+    shortnames = collect(map(x -> x == "1pM 2" ? "1pM" : x, shortnames))
     return shortnames, lblconcs
 end
 

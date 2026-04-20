@@ -26,9 +26,9 @@ $$f_{t^{\star}}(t) = k e^{-kt} \qquad \text{and} \qquad F_{t^{\star}}(t) = 1 - e
 
 We fitted this distribution on each dataset separately using the maximum likelihood method explained below. We compared the extracted effective rates to the expected diffusion-limited particle binding rate (Fig. S2F), $k = \kappa c$, with
 
-$$\kappa = \frac{2 k_\mathrm{B} T R_\mathrm{cell}}{3\eta R_\mathrm{particle}} \approx 0.16 \  \mathrm{pM^{-1}\ s^{-1}},$$
+$$\kappa = \frac{2 k_\mathrm{B} T R_\mathrm{cell}}{3\eta R_\mathrm{particle}} \approx 0.2 \  \mathrm{pM^{-1}\ s^{-1}},$$
 
-where $\eta = 0.7\ \mathrm{mPa\ s}$ is the viscosity of water at $T = 37^{\circ}\mathrm{C} = 310\ \mathrm{K}$ [1], $R_\mathrm{cell} = 4\ \mathrm{\mu m}$ is the typical B cell radius, and $R_\mathrm{particle} = 60\ \mathrm{nm}$ is the typical radius of virus-like particles [2].
+where $\eta = 0.7\ \mathrm{mPa\ s}$ is the viscosity of water at $T = 37^{\circ}\mathrm{C} = 310\ \mathrm{K}$ [1], $R_\mathrm{cell} = 5\ \mathrm{\mu m}$ is the typical B cell radius, and $R_\mathrm{particle} = 60\ \mathrm{nm}$ is the typical radius of virus-like particles [2].
 
 ### Hit models
 

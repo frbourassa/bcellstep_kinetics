@@ -207,8 +207,8 @@ function plot_kobs_vs_concentration(nicenames, fit_params, fit_errors, ncell_all
                 legend=false, left_margin=3mm, right_margin=3mm, bottom_margin=3mm)
     
     # Compare to diffusion-limited rate
-    k0 = 0.16  # pM^-1 s^-1, for B cell radius 2.5 um
-    c_line = collect(LinRange(minimum(lblconcs)-0.005, minimum(lblconcs) + 0.2, 100))
+    k0 = 0.2  # pM^-1 s^-1, for B cell radius 5 um
+    c_line = collect(LinRange(minimum(lblconcs)-0.005, minimum(lblconcs) + 0.15, 100))
     k_line = k0 .* c_line
     pl.plot!(p, c_line, k_line, linestyle=:dot, color=:black,
              linewidth=2.0)
@@ -442,13 +442,10 @@ function plotrobustness(fits123, rms123, allnames,
     kc_indices = 1 .+ selected
 
     # Use magma colors for the low-concentration datasets, matching their rank among all datasets.
-    all_magma = pl.cgrad(:magma, n_dsets-2, categorical=true)
-    sort_idx = sortperm(lblconcs)
-    inverse_rank = zeros(Int, n_dsets)
-    for (rank, idx) in enumerate(sort_idx)
-        inverse_rank[idx] = rank
-    end
-    linecolors = [all_magma[inverse_rank[i]] for i in selected]
+    n_selected = length(selected)
+    all_magma = pl.cgrad(:magma, n_selected+2, categorical=true)
+    range_selected = collect(1:1:n_selected)
+    linecolors = [all_magma[n_selected-i+1] for i in range_selected]
 
     # First plot: kc across threshold choices, per dataset and model
     fracrangep = fracrange .+ 1.0
@@ -469,6 +466,8 @@ function plotrobustness(fits123, rms123, allnames,
     pl.plot!(p_kc, [NaN, NaN], [NaN, NaN]; label="Three-hit", color=:black, linestyle=:dot)
 
     pl.vline!(p_kc, [fluothresh_default+1.0]; linestyle=:dash, color=:black, label=nothing)
+    pl.annotate!(p_kc, [fluothresh_default+1.02], maximum(fits3[:, kc_indices])*0.76, 
+                (raw"Default $f$", 12, :bottom, :left))
 
     pl.xlabel!(p_kc, raw"Fluorescence threshold factor $f$")
     pl.ylabel!(p_kc, raw"Hit rate $k_1$ (s$^\mathrm{-1}$)")
@@ -478,8 +477,8 @@ function plotrobustness(fits123, rms123, allnames,
     # Shade area where fits are reasonable
     good_frac_range = [0.25, 1.2]
     pl.vspan!(p_kc, good_frac_range.+1.0, color=:grey, alpha=0.3, label=nothing)
-    pl.annotate!(p_kc, 1.3, maximum(fits3[:, kc_indices])*0.85, 
-        ("Optimal region", :grey, :bottom, :left))
+    pl.annotate!(p_kc, 1.3, maximum(fits3[:, kc_indices])*0.8, 
+        ("Optimal region", 12, :grey, :bottom, :left))
 
     # Final plots: RMS error of linear vs quadratic fits
     # and RMS error of 3-step vs best of 1 or 2 steps,
