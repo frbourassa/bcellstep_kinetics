@@ -76,7 +76,7 @@ For each hit model, we maximized $\log \mathcal{L}_\mathrm{tot}$ across datasets
 
 ## Comparison of the different hit models
 
-At high particle concentrations, the hit rate $k_1$ is fast and the intrinsic activation step with rate $k_2$ limits activation; at low concentrations, the converse holds. Consequently, the global value of $k_2$ is mainly constrained by high-concentration datasets, where the 1-, 2-, and 3-hit models are essentially indistinguishable. **[EDIT: substantially condensed this opening; changed "determined by" → "constrained by" which is more precise for an MLE context]** We therefore compared model accuracy only for the four datasets at 0.01 pM and 0.1 pM (two replicates each), where the models are most clearly distinguished and $k_1$ is close to the diffusion limit. Fit quality was quantified by the root-mean-squared (RMS) error on the CDF up to $t_\mathrm{cut}$. **[EDIT: minor tightening; hyphenated "root-mean-squared"]**
+At high particle concentrations, the hit rate $k_1$ is fast and the intrinsic activation step with rate $k_2$ limits activation; at low concentrations, the converse holds. Consequently, the global value of $k_2$ is mainly constrained by high-concentration datasets, where the 1-, 2-, and 3-hit models are essentially indistinguishable. We therefore compared model accuracy only for the four datasets at 0.01 pM and 0.1 pM (two replicates each), where the models are most clearly distinguished and $k_1$ is close to the diffusion limit. Fit quality was quantified by the root-mean-squared (RMS) error on the CDF up to $t_\mathrm{cut}$. 
 
 
 ## References

@@ -201,7 +201,7 @@ function plot_kobs_vs_concentration(nicenames, fit_params, fit_errors, ncell_all
     n_dsets = length(selected_concs)
     mark_colors = pl.cgrad(:magma)[[(2*i-2)/(2*n_dsets-1) for i in 1:1:n_dsets]]
     p = pl.plot(selected_concs, fitted_ks, linewidth=2, color=:grey, label=nothing)
-    pl.scatter!(p, selected_concs, fitted_ks, yerr=fit_ks_errs, marker=:circle, markersize=7,
+    pl.scatter!(p, selected_concs, fitted_ks, marker=:circle, markersize=7,
                 color=mark_colors, xlabel="Particle concentration (pM)", 
                 ylabel=raw"Effective rate $k_{\mathrm{obs}} (\mathrm{s^{-1}})$", 
                 legend=false, left_margin=3mm, right_margin=3mm, bottom_margin=3mm)
