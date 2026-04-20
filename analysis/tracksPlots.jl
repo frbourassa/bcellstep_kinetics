@@ -114,7 +114,7 @@ function plot_trajs_activ_cdf(dfi, activtimes, activfluo, thresh, backgnd,
         xmid = times[div(length(times), 2)]
         ytop = maximum(maximum.(skipmissing.(eachrow(dfi))))
         conclbl2 = replace(conclbl, "1pM 2" => "1pM")  # replicate 1 low cell count
-        pl.annotate!(p, xmid, ytop, ("Example: " * conclbl2, 12))
+        pl.annotate!(p, xmid, ytop, ("Example tracks: " * conclbl2, 14))
     end
 
     return ppp
@@ -153,8 +153,8 @@ function plot_kobs_fits(cdf_prep_results, nicenames,
                 bottom_margin=3mm, xlabel="Time (s)", ylabel="Fraction of activated cells",
                 xlim=tplotlim, ylim=fracplotlim, legend=:bottomright,
                 tickfont=pl.font(13), legendfontsize=11,
-                titlefontsize=12, legendmargin=4mm, foreground_color_legend=nothing,
-                title=raw"1-step model for $k_\mathrm{obs}$ fits")
+                titlefontsize=14, legendmargin=4mm, foreground_color_legend=nothing,
+                title=raw"Exponential model for $k_\mathrm{obs}$")
 
     # Plot all data points first
     markertypes = [:circle, :diamond, :square, :utriangle]
@@ -217,7 +217,7 @@ function plot_kobs_vs_concentration(nicenames, fit_params, fit_errors, ncell_all
     ytxt, xtxt = minimum(fitted_ks)+0.001, minimum(lblconcs)+1.5
     pl.plot!(p, [xtxt, xtxt-1.0], [ytxt, ytxt], 
         arrow=true, color=:black, linewidth=2, label=nothing)
-    pl.annotate!(p, xtxt+0.2, ytxt, ("Diffusion-limited", :left, 12))
+    pl.annotate!(p, xtxt+0.2, ytxt, ("Diffusion-limited", :left, 14))
 
     return p
 end
@@ -357,7 +357,9 @@ function plot_single_dataset_cdf(cdf_prep_results_one, name, duration,
     
     # Create plot
     p = pl.plot(size=(550, 450), legend=:topleft, 
-                left_margin=3mm, right_margin=3mm, bottom_margin=3mm)
+                left_margin=3mm, right_margin=3mm, bottom_margin=3mm,
+                title="Example: $name", titlefontsize=14,
+                foreground_color_legend=nothing)
     
     # Plot empirical CDF as step function
     pl.plot!(p, goodt, ncumul, linetype=:steppost, 
@@ -390,22 +392,22 @@ function plot_single_dataset_cdf(cdf_prep_results_one, name, duration,
     pl.plot!(p, trange, y3, label="3-hit model", 
              color=color3, linewidth=2.5, linestyle=:dot)
     
-    pl.xlabel!(p, "Time (s)", fontsize=12)
-    pl.ylabel!(p, "Fraction of activated cells", fontsize=12)
+    pl.xlabel!(p, "Time (s)", fontsize=14)
+    pl.ylabel!(p, "Fraction of activated cells", fontsize=14)
 
     # Annotate with RMS error of each model fit
     lbl_rms = @sprintf "\n%.3f" rms1
     lbl_rms = raw"RMSE$_1$ :" * lbl_rms
     d = div(length(y1), 4)
-    pl.annotate!(p, trange[3*d+20], y1[3*d], 
+    pl.annotate!(p, trange[3*d+20], y1[3*d]*0.8, 
         (lbl_rms, 12, color1, :top, :left))
     lbl_rms2 = @sprintf "\n%.3f" rms2
     lbl_rms2 = raw"RMSE$_2$ :" * lbl_rms2
-    pl.annotate!(p, trange[2*d+20], y2[2*d], 
+    pl.annotate!(p, trange[2*d+20], y2[2*d]*0.8, 
         (lbl_rms2, 12, color2, :top, :left))
     lbl_rms3 = @sprintf "\n%.3f" rms3
     lbl_rms3 = raw"RMSE$_3$ :" * lbl_rms3
-    pl.annotate!(p, trange[d+30], y3[d], 
+    pl.annotate!(p, trange[d+20], y3[d]*0.8, 
         (lbl_rms3, 12, color3, :bottom, :left))
     
     return p
