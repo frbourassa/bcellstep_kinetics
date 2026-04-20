@@ -11,7 +11,7 @@ To determine the activation time $t^{\star}$ of each B cell (i.e., the time at w
 
 ## Empiric cumulative distribution function (CDF) normalization
 
-In principle, tracks that do not reach activation during a recording carry information about the activation time distribution; however, in practice, some of those tracks come from anergic, dead, or out-of-focus B cells, or from otherwise spurious tracks. To estimate the fraction of such inactive tracks to reject, we reasoned that at high (10 pM) particle concentrations, all B cells should have encountered enough particles to activate. We therefore used the fraction of inactive tracks in those datasets as an estimate of the fraction of tracks to reject, and rejected at most this fraction of inactive tracks from all other datasets. This still left, for instance, $\sim 25\,\%$ inactive tracks at the end of recordings for 0.01 pM concentration, where the particle contact rate is low enough that several cells had not yet been activated.
+In principle, tracks that do not reach activation during a recording carry information about the activation time distribution; however, in practice, some of those tracks come from anergic, dead, or out-of-focus B cells, or from otherwise spurious tracks. To estimate the fraction of such inactive tracks to reject, we reasoned that at high (10 pM) particle concentrations, all B cells should have encountered enough particles to activate. We therefore used the fraction of inactive tracks in those datasets as an estimate of the fraction of tracks to reject, and rejected at most this fraction of inactive tracks from all other datasets. This still left, for instance, $\sim 25\ \%$ inactive tracks at the end of recordings for 0.01 pM concentration, where the particle contact rate is low enough that several cells had not yet been activated.
 
 
 ## Mathematical modeling of the distribution of B cell activation times
@@ -22,13 +22,13 @@ We treated B cell activation as a stochastic process governed by the waiting tim
 
 First, we extracted an "observed" activation rate for each experimental replicate using a one-step activation model, in which a B cell transitions from inactive to active with an effective rate $k_\mathrm{obs}$. In this simplest possible model, the FPT follows an exponential distribution:
 
-$$f_{t^{\star}}(t) = k e^{-kt} \qquad \text{and} \qquad F_{t^{\star}}(t) = 1 - e^{-kt} \,\,.$$
+$$f_{t^{\star}}(t) = k e^{-kt} \qquad \text{and} \qquad F_{t^{\star}}(t) = 1 - e^{-kt} \ \ .$$
 
 We fitted this distribution on each dataset separately using the maximum likelihood method explained below. We compared the extracted effective rates to the expected diffusion-limited particle binding rate (Fig. S2F), $k = \kappa c$, with
 
-$$\kappa = \frac{2 k_\mathrm{B} T R_\mathrm{cell}}{3\eta R_\mathrm{particle}} \approx 0.16 \, \mathrm{pM^{-1}\,s^{-1}},$$
+$$\kappa = \frac{2 k_\mathrm{B} T R_\mathrm{cell}}{3\eta R_\mathrm{particle}} \approx 0.16 \  \mathrm{pM^{-1}\ s^{-1}},$$
 
-where $\eta = 0.7\,\mathrm{mPa\,s}$ is the viscosity of water at $T = 37\,^{\circ}\mathrm{C} = 310\,\mathrm{K}$ [1], $R_\mathrm{cell} = 4\,\mathrm{\mu m}$ is the typical B cell radius, and $R_\mathrm{particle} = 60\,\mathrm{nm}$ is the typical radius of virus-like particles [2].
+where $\eta = 0.7\ \mathrm{mPa\ s}$ is the viscosity of water at $T = 37^{\circ}\mathrm{C} = 310\ \mathrm{K}$ [1], $R_\mathrm{cell} = 4\ \mathrm{\mu m}$ is the typical B cell radius, and $R_\mathrm{particle} = 60\ \mathrm{nm}$ is the typical radius of virus-like particles [2].
 
 ### Hit models
 
@@ -44,7 +44,7 @@ with the convention $P(-1, t) = 0$ in the first equation for $m=0$. The initial 
 
 Solving this system of linear differential equations in Laplace space, we find, in general, that the PDF and CDF of a $M$-hit model are given by the inverse Laplace transform of
 
-$$\tilde{f}(s) = \frac{k_1^M k_2}{(k_1 + s)^M (k_2 + s)} \quad \text{and} \quad \tilde{F}(s) = \frac{k_1^M k_2}{s (k_1 + s)^M (k_2 + s)} \,\, .$$
+$$\tilde{f}(s) = \frac{k_1^M k_2}{(k_1 + s)^M (k_2 + s)} \quad \text{and} \quad \tilde{F}(s) = \frac{k_1^M k_2}{s (k_1 + s)^M (k_2 + s)} \ \  .$$
 
 For the 1-, 2-, and 3-hit models, assuming that $k_1 \neq k_2$, these inverse transforms yield 
 
@@ -71,7 +71,7 @@ For recording $j$ containing $N$ cells with valid calcium traces, suppose $K_0$ 
 
 $$\log \mathcal{L}_j = K_0 \log\!\left(F_{t^{\star}}(0)\right) + \sum_{n=K_0+1}^{K_0+K_1} \log\!\left(f_{t^{\star}}(t_n)\right) + \left(N - K_0 - K_1\right) \log\!\left(1 - F_{t^{\star}}(t_\text{cut})\right).$$
 
-For each hit model, we maximized $\log \mathcal{L}_\mathrm{tot}$ across datasets with respect to the global rate $k_2$ and the per-recording parameters $(k_1, t_0)$, using the interior-point Newton algorithm in *Optim.jl* (Julia) [3, 4]. Parameters $k_2$ and $k_1/c$ (where $c$ is the particle concentration in pM) were constrained to $[10^{-4},\, 20.0]\,\text{s}^{-1}$, and $t_0$ was bounded between $-20\,\text{s}$ and $t_1 - 10^{-3}\,\text{s}$, where $t_1$ is the first observed activation time. For Fig. S2G-I, we repeated this process across a range of fluorescence threshold factors $f$. The fits for $k_1$ were generally insensitive to $f$, whereas $t_0$ varied more because the earliest activation time $t_1$ is delayed as $f$ increases. 
+For each hit model, we maximized $\log \mathcal{L}_\mathrm{tot}$ across datasets with respect to the global rate $k_2$ and the per-recording parameters $(k_1, t_0)$, using the interior-point Newton algorithm in *Optim.jl* (Julia) [3, 4]. Parameters $k_2$ and $k_1/c$ (where $c$ is the particle concentration in pM) were constrained to $[10^{-4},\  20.0]\ \text{s}^{-1}$, and $t_0$ was bounded between $-20\ \text{s}$ and $t_1 - 10^{-3}\ \text{s}$, where $t_1$ is the first observed activation time. For Fig. S2G-I, we repeated this process across a range of fluorescence threshold factors $f$. The fits for $k_1$ were generally insensitive to $f$, whereas $t_0$ varied more because the earliest activation time $t_1$ is delayed as $f$ increases. 
 
 
 ## Comparison of the different hit models
