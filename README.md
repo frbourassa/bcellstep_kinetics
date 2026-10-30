@@ -1,8 +1,8 @@
 # Population kinetics analysis of B cell activation microscopy tracks
 
-Code to analyze B cell calcium imaging microscopy tracks in terms of the cumulative distribution of active cells, to produce Figure S2 of the manuscript 
+Code to analyze B cell calcium imaging microscopy tracks in terms of the cumulative distribution of active cells, to produce Extended Data Figure 3 and Figure 2 of the manuscript 
 
-> Julianne B. Riggs, Alexander J. Ritter, François X. P. Bourassa*, Alexander R. Meyer*, Erika Kay-Tsumagari, Wei-Yun Wholey, Jeremy Libang, James Mueller, Wen Lu, Ned S. Wingreen, Wei Cheng**, Julie Zikherman**. "Virus-like antigen display delivers a stand–alone danger signal through the BCR that circumvents tolerance", _bioRxiv_, April 24, 2026. [https://doi.org/10.64898/2026.04.23.720482](https://doi.org/10.64898/2026.04.23.720482)
+> Julianne B. Riggs, Alexander J. Ritter, François X. P. Bourassa*, Alexander R. Meyer*, Erika Kay-Tsumagari, Wei-Yun Wholey, James L. Mueller, Ramya Parameswaran, Jeremy Libang, Wen Lu, Ned S. Wingreen, Wei Cheng**, Julie Zikherman**. "Virus-like antigen display delivers a stand–alone danger signal through the BCR that evades an anergy-like program", _bioRxiv_, April 24, 2026. [https://doi.org/10.64898/2026.04.23.720482](https://doi.org/10.64898/2026.04.23.720482)
 
 See the Methods section of the manuscript for a summary of the data processing, models and maximum likelihood estimation procedure. See the `models.md` file for a more detailed mathematical description of the cell activation first-passage time distributions and their estimation by maximum likelihood. 
 
@@ -15,6 +15,8 @@ The Jupyter notebook `tracksObsFits.ipynb` fits a one-step model (i.e. exponenti
 - The Jupyter notebook `hitModelsFits.ipynb` runs the overall analysis using the complete hit models with a cell activation step, fitted across datasets, and produces the figure panels. It relies on model curves, log-likelihood functions and parameter estimation procedures in `analysis/hitModelsML.jl`, and on plotting scripts in `analysis/tracksPlots.jl`. 
 
 - The Jupyter notebook `onehit_twohits_cartoons.ipynb` makes illustrative cumulative distribution plots for the 1-, 2-, and 3-hit models, as shown in panels D and G. 
+
+- The folder `ca2_processing_figure2/` contains the raw tracks data, the particle tracking and trace processing pipeline, and plotting code to generate Figure 2. 
 
 
 ## Requirements
@@ -31,6 +33,17 @@ This code was run using Julia version 1.12.2 on macOS 26.4 and requires adding t
 
 It also requires Jupyter to run the notebooks, which can be installed through IJulia if not already available on your system (see installation instructions). The code was run on Jupyter notebook version 6.5.7. 
 
+For the raw particle tracking code, Python and R installations are required. For the R script:
+- R version 4.6.1
+- dplyr_1.2.1
+- tidyr_1.3.2
+
+For Python scripts:
+- Python 3.13.9
+- matplotlib 3.10.6
+- pandas 2.3.3
+- seaborn  0.13.2
+
 
 ## Installation instructions
 
@@ -40,12 +53,16 @@ To install Jupyter Notebooks, if not already available on your system, follow th
 
 The installation of Julia, Jupyter, and the required modules listed above typically takes 30 minutes or less on a personal computer. 
 
+For the particle tracking code in `ca2_processing_figure2`, follow the installation instructions for Python and R on the respective websites of these languages. 
+
 
 ## Reproduction instructions
 
 To reproduce the figure panels, clone or download the repository and run the Jupyter notebooks listed above. The figures should appear in the notebooks and be saved as pdfs in the `figures/` folder. 
 
 Note that once Jupyter and the Julia requirements are installed, the notebooks can be run by launching Jupyter (e.g. with the terminal command `jupyter notebook`) or within an integrated development environment (IDE) supporting notebooks, such as [VSCode](https://code.visualstudio.com/docs/datascience/jupyter-notebooks). 
+
+The scripts in `ca2_processing_figure2` contain execution instructions in comments at the top of each file. There are also additional explanations in `guide.txt` and the Word document within that folder. 
 
 
 ## Demo
@@ -165,7 +182,7 @@ Generating plots...
 ``` 
 
 ## Authors
-François X. P. Bourassa, 2026, and all authors of the manuscript. 
+François X. P. Bourassa, Alexander J. Ritter, 2026, and all authors of the manuscript. 
 
 ## License
 CC-BY-SA-4.0

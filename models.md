@@ -1,12 +1,12 @@
 # Population kinetics analysis of B cell activation by VLPs
 
-## Calcium traces processing for Fig. S2
+## Calcium traces processing for Extended Data Figure 3
 
 For each recording (defined by VLP concentration and replicate), we first filtered out spurious calcium fluorescence traces, excluding traces lasting fewer than 50 frames or beginning more than 30 s after the start of the recording. We retained only replicates containing at least 15 cells to ensure meaningful fits could be performed.
 
-To distinguish inactive from active B cells, we defined a calcium fluorescence intensity threshold equal to a factor $f$ times the background fluorescence; the background was determined by finding the minimum fluorescence in each trace and taking the median over all traces. We used the same factor $f$ across recordings. We tested a range of $f$ values between 1.1 and 2.5 and settled on a default value $f = 1.8$ (Fig. S2G-I).
+To distinguish inactive from active B cells, we defined a calcium fluorescence intensity threshold equal to a factor $f$ times the background fluorescence; the background was determined by finding the minimum fluorescence in each trace and taking the median over all traces. We used the same factor $f$ across recordings. We tested a range of $f$ values between 1.1 and 2.5 and settled on a default value $f = 1.8$ (Extended Data Fig. 3G-I).
 
-To determine the activation time $t^{\star}$ of each B cell (i.e., the time at which its calcium trace first crossed the threshold), we performed linear interpolation between the last time point below threshold and the first time point above it. Traces already above threshold at the start of imaging were assigned $t^{\star} = 0$. Cells that never crossed the threshold were labeled inactive for the entire recording. Representative calcium fluorescence traces and the thresholding procedure are illustrated in Fig. S2D.
+To determine the activation time $t^{\star}$ of each B cell (i.e., the time at which its calcium trace first crossed the threshold), we performed linear interpolation between the last time point below threshold and the first time point above it. Traces already above threshold at the start of imaging were assigned $t^{\star} = 0$. Cells that never crossed the threshold were labeled inactive for the entire recording. Representative calcium fluorescence traces and the thresholding procedure are illustrated in Extended Data Fig. 3D.
 
 
 ## Empiric cumulative distribution function (CDF) normalization
@@ -24,7 +24,7 @@ First, we extracted an "observed" activation rate for each experimental replicat
 
 $$f_{t^{\star}}(t) = k e^{-kt} \qquad \text{and} \qquad F_{t^{\star}}(t) = 1 - e^{-kt} \ \ .$$
 
-We fitted this distribution on each dataset separately using the maximum likelihood method explained below. We compared the extracted effective rates to the expected diffusion-limited particle binding rate (Fig. S2F), $k = \kappa c$, with
+We fitted this distribution on each dataset separately using the maximum likelihood method explained below. We compared the extracted effective rates to the expected diffusion-limited particle binding rate (Extended Data Fig. 3F), $k = \kappa c$, with
 
 $$\kappa = \frac{2 k_\mathrm{B} T R_\mathrm{cell}}{3\eta R_\mathrm{particle}} \approx 0.2 \  \mathrm{pM^{-1}\ s^{-1}},$$
 
@@ -34,7 +34,7 @@ where $\eta = 0.7\ \mathrm{mPa\ s}$ is the viscosity of water at $T = 37^{\circ}
 
 After observing that $k_\mathrm{obs}$ was close to this diffusion limit at low particle concentrations but well below it at higher concentrations, we developed refined models incorporating particle hit steps and an intrinsic cell activation step. 
 
-Specifically, we considered an $M$-hit model in which a B cell must first encounter $M$ particles sequentially, each with hit rate $k_1$ (concentration-dependent), before transitioning to the active state with a concentration-independent intrinsic rate $k_2$. The B cell therefore transitions through $M+1$ states in total: the first $M$ transitions occur with rate $k_1$ and the final one, with rate $k_2$. A schematic of this model appears in Fig. S2C. Let $P(m, t)$ denote the probability that the cell has encountered $m$ particles by time $t$, and $P(A, t)$ the probability that it has reached the activated state. The chemical master equation is
+Specifically, we considered an $M$-hit model in which a B cell must first encounter $M$ particles sequentially, each with hit rate $k_1$ (concentration-dependent), before transitioning to the active state with a concentration-independent intrinsic rate $k_2$. The B cell therefore transitions through $M+1$ states in total: the first $M$ transitions occur with rate $k_1$ and the final one, with rate $k_2$. A schematic of this model appears in Extended Data Fig. 3C. Let $P(m, t)$ denote the probability that the cell has encountered $m$ particles by time $t$, and $P(A, t)$ the probability that it has reached the activated state. The chemical master equation is
 
 $$\frac{dP(m, t)}{dt} = k_1 P(m-1, t) - k_1 P(m, t), \quad 0 \leq m < M,$$
 $$\frac{dP(M, t)}{dt} = k_1 P(M-1, t) - k_2 P(M, t),$$
@@ -71,7 +71,7 @@ For recording $j$ containing $N$ cells with valid calcium traces, suppose $K_0$ 
 
 $$\log \mathcal{L}_j = K_0 \log\!\left(F_{t^{\star}}(0)\right) + \sum_{n=K_0+1}^{K_0+K_1} \log\!\left(f_{t^{\star}}(t_n)\right) + \left(N - K_0 - K_1\right) \log\!\left(1 - F_{t^{\star}}(t_\text{cut})\right).$$
 
-For each hit model, we maximized $\log \mathcal{L}_\mathrm{tot}$ across datasets with respect to the global rate $k_2$ and the per-recording parameters $(k_1, t_0)$, using the interior-point Newton algorithm in *Optim.jl* (Julia) [3, 4]. Parameters $k_2$ and $k_1/c$ (where $c$ is the particle concentration in pM) were constrained to $[10^{-4},\  20.0]\ \text{s}^{-1}$, and $t_0$ was bounded between $-20\ \text{s}$ and $t_1 - 10^{-3}\ \text{s}$, where $t_1$ is the first observed activation time. For Fig. S2G-I, we repeated this process across a range of fluorescence threshold factors $f$. The fits for $k_1$ were generally insensitive to $f$, whereas $t_0$ varied more because the earliest activation time $t_1$ is delayed as $f$ increases. 
+For each hit model, we maximized $\log \mathcal{L}_\mathrm{tot}$ across datasets with respect to the global rate $k_2$ and the per-recording parameters $(k_1, t_0)$, using the interior-point Newton algorithm in *Optim.jl* (Julia) [3, 4]. Parameters $k_2$ and $k_1/c$ (where $c$ is the particle concentration in pM) were constrained to $[10^{-4},\  20.0]\ \text{s}^{-1}$, and $t_0$ was bounded between $-20\ \text{s}$ and $t_1 - 10^{-3}\ \text{s}$, where $t_1$ is the first observed activation time. For Extended Data Fig. 3G-I, we repeated this process across a range of fluorescence threshold factors $f$. The fits for $k_1$ were generally insensitive to $f$, whereas $t_0$ varied more because the earliest activation time $t_1$ is delayed as $f$ increases. 
 
 
 ## Comparison of the different hit models

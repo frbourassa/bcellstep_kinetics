@@ -1,0 +1,8 @@
+# Raw data files
+All files in JR064, plus Ionomycin.csv from JR076
+
+# Order to run code
+
+python fix_filenames.py {dir}
+Rscript ca_data_processing.R {dir}
+python ca_data_plotting.py {dir}/processed
